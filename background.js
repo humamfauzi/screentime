@@ -1,389 +1,313 @@
-// Background service worker for Screentime extension
+// Import modules using conditional require for compatibility with both browser and Node.js
+const { Aux, Storage } = typeof module !== 'undefined' && module.exports 
+    ? require('./fn.js') 
+    : window;
 
-// We'll track tabs and focus sessions in-memory and persist under `raw`.
-// tabsData: { [tabId]: { domain, sessionId, sessionStart, sessionUrl, focusId, focusStart } }
-const tabsData = {};
-let currentFocusedTabId = null; // which tab currently has browser focus
-let browserFocused = true; // whether the browser window currently has focus
+// event when extension is installed or initiated
+chrome.runtime.onInstalled.addListener(async () => {
+    await Storage.saveRaw({});
+})
 
-function storageGet(keys) {
-  return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
-}
-
-function storageSet(obj) {
-  return new Promise((resolve) => chrome.storage.local.set(obj, resolve));
-}
-
-function generateId() {
-  if (crypto && crypto.randomUUID) return crypto.randomUUID();
-  // fallback
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-function isCountableUrl(url) {
-  if (!url) return false;
-  const invalidPrefixes = ['chrome://', 'chrome-extension://', 'about:blank'];
-  for (const p of invalidPrefixes) if (url.startsWith(p)) return false;
-  try {
-    const u = new URL(url);
-    // ignore the builtin New Tab page which in some platforms uses chrome://newtab
-    if (!u.hostname) return false;
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-
-async function createSessionForTab(tabId, url) {
-  if (!isCountableUrl(url)) return;
-  const domain = extractDomain(url);
-  if (!domain) return;
-
-  const sessionId = generateId();
-  const now = Date.now();
-
-  // persist under raw
-  const data = await storageGet(['raw']);
-  const raw = data.raw || {};
-  if (!raw[domain]) raw[domain] = {};
-  raw[domain][sessionId] = { tabId, url, start: now };
-  await storageSet({ raw });
-
-  tabsData[tabId] = tabsData[tabId] || {};
-  tabsData[tabId].domain = domain;
-  tabsData[tabId].sessionId = sessionId;
-  tabsData[tabId].sessionStart = now;
-  tabsData[tabId].sessionUrl = url;
-  // checkpoint used to accumulate incremental time (prevents double counting)
-  tabsData[tabId].lastCheckpoint = now;
-}
-
-async function endSessionForTab(tabId) {
-  const td = tabsData[tabId];
-  if (!td || !td.sessionId || !td.domain) return;
-  const now = Date.now();
-
-  // first end any ongoing focus
-  if (td.focusId) {
-    await endFocusForTab(tabId);
-  }
-
-  const data = await storageGet(['raw']);
-  const raw = data.raw || {};
-  const domain = td.domain;
-  const sessionId = td.sessionId;
-  if (raw[domain] && raw[domain][sessionId]) {
-    raw[domain][sessionId].end = now;
-    await storageSet({ raw });
-
-    // add remaining session duration since last checkpoint (prevents double counting)
-    const last = td.lastCheckpoint || td.sessionStart || now;
-    const sessionSec = Math.floor((now - last) / 1000);
-    if (sessionSec > 0) await addSecondsToActivity(domain, sessionSec);
-  }
-
-  delete tabsData[tabId];
-}
-
-async function startFocusForTab(tabId) {
-  const td = tabsData[tabId];
-  console.log('Starting focus for tab', tabId, td);
-  if (!td || !td.sessionId || !td.domain) return;
-  if (td.focusId) return; // already focused
-  const focusId = generateId();
-  const now = Date.now();
-
-  const data = await storageGet(['raw']);
-  const raw = data.raw || {};
-  const domain = td.domain;
-  const sessionId = td.sessionId;
-  if (raw[domain] && raw[domain][sessionId]) {
-    raw[domain][sessionId].focus = raw[domain][sessionId].focus || {};
-    raw[domain][sessionId].focus[focusId] = { start: now };
-    await storageSet({ raw });
-
-    td.focusId = focusId;
-    td.focusStart = now;
-    currentFocusedTabId = tabId;
-  }
-}
-
-async function endFocusForTab(tabId) {
-  const td = tabsData[tabId];
-  console.log('Ending focus for tab', tabId, td);
-  if (!td || !td.focusId || !td.domain || !td.sessionId) return;
-  const now = Date.now();
-
-  const data = await storageGet(['raw']);
-  const raw = data.raw || {};
-  const domain = td.domain;
-  const sessionId = td.sessionId;
-  const focusId = td.focusId;
-  if (raw[domain] && raw[domain][sessionId] && raw[domain][sessionId].focus && raw[domain][sessionId].focus[focusId]) {
-    raw[domain][sessionId].focus[focusId].end = now;
-    await storageSet({ raw });
-
-    // do not add focus time to aggregated `activity` to avoid double counting.
-    // focus periods are stored under `raw` only.
-  }
-
-  td.focusId = null;
-  td.focusStart = null;
-  if (currentFocusedTabId === tabId) currentFocusedTabId = null;
-}
-
-async function addSecondsToActivity(domain, seconds) {
-  if (!domain || !seconds || seconds <= 0) return;
-  const today = getTodayString();
-  const data = await storageGet(['activity']);
-  const activity = data.activity || {};
-  if (!activity[today]) activity[today] = {};
-  if (!activity[today][domain]) activity[today][domain] = 0;
-  activity[today][domain] += seconds;
-  await storageSet({ activity });
-}
-
-// Initialize storage on install
-chrome.runtime.onInstalled.addListener(() => {
-  console.log('Screentime extension installed second version');
-  
-  // Initialize default settings
-  chrome.storage.local.get(['settings'], (result) => {
-    if (!result.settings) {
-      chrome.storage.local.set({
-        settings: {
-          limits: {}, // { 'domain.com': { limit: 3600, days: [0,1,2,3,4,5,6] } }
-          notificationThreshold: 0.9 // Notify at 90% of limit
-        },
-        activity: {}, // { 'YYYY-MM-DD': { 'domain.com': timeInSeconds } }
-        notifiedToday: {}, // Track which sites we've notified about today
-        raw: {} // like activity but the top key are the sites.
-      });
-    }
-  });
-
-  // Set up alarm to check every minute
-  chrome.alarms.create('trackTime', { periodInMinutes: 1 });
-});
-
-// Track tab creation: start a session if a countable URL is present
-chrome.tabs.onCreated.addListener(async (tab) => {
-  try {
-    if (tab && tab.id && isCountableUrl(tab.url)) {
-      await createSessionForTab(tab.id, tab.url);
-    }
-  } catch (e) {
-    console.error('onCreated handler error', e);
-  }
-});
-
-// Track URL changes in a tab
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  try {
-    if (changeInfo.url) {
-      // If new URL is countable and either no session exists or domain changed -> start new session
-      if (isCountableUrl(changeInfo.url)) {
-        const newDomain = extractDomain(changeInfo.url);
-        const td = tabsData[tabId];
-        if (!td || !td.sessionId) {
-          await createSessionForTab(tabId, changeInfo.url);
-        } else if (td.domain !== newDomain) {
-          // domain/subdomain changed -> end old session and start new one
-          await endSessionForTab(tabId);
-          await createSessionForTab(tabId, changeInfo.url);
-        } else {
-          // same domain but url changed; update sessionUrl in memory and raw
-          td.sessionUrl = changeInfo.url;
-          const data = await storageGet(['raw']);
-          const raw = data.raw || {};
-          if (raw[td.domain] && raw[td.domain][td.sessionId]) {
-            raw[td.domain][td.sessionId].url = changeInfo.url;
-            await storageSet({ raw });
-          }
-        }
-      } else {
-        // new URL not countable -> end any existing session for this tab
-        await endSessionForTab(tabId);
-      }
-    }
-  } catch (e) {
-    console.error('onUpdated handler error', e);
-  }
-});
-
-// Save time when window focus changes
-chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  try {
-    if (windowId === chrome.windows.WINDOW_ID_NONE) {
-      // Browser lost focus
-      browserFocused = false;
-      if (currentFocusedTabId) {
-        await endFocusForTab(currentFocusedTabId);
-      }
-      currentFocusedTabId = null;
-    } else {
-      // Browser gained focus
-      browserFocused = true;
-      chrome.tabs.query({ active: true, windowId: windowId }, async (tabs) => {
-        if (tabs && tabs[0]) {
-          const tab = tabs[0];
-          // ensure session exists, then start focus on this tab
-          if (!tabsData[tab.id] || !tabsData[tab.id].sessionId) {
-            if (isCountableUrl(tab.url)) await createSessionForTab(tab.id, tab.url);
-          }
-          await startFocusForTab(tab.id);
-        }
-      });
-    }
-  } catch (e) {
-    console.error('onFocusChanged handler error', e);
-  }
-});
-
-// Periodic check via alarm
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === 'trackTime') {
-    checkAndNotify();
-  }
-});
-
-// Track active tab changes (activation)
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-  try {
-    console.log("activated", activeInfo)
-    // end focus for previous focused tab (if any and different)
-    if (currentFocusedTabId && currentFocusedTabId !== activeInfo.tabId) {
-      await endFocusForTab(currentFocusedTabId);
-    }
-
-    chrome.tabs.get(activeInfo.tabId, async (tab) => {
-      if (!tab) return;
-      // ensure session exists for this tab
-      if (!tabsData[tab.id] || !tabsData[tab.id].sessionId) {
-        if (isCountableUrl(tab.url)) await createSessionForTab(tab.id, tab.url);
-      }
-      // start focus only if browser window is focused
-      if (browserFocused) await startFocusForTab(tab.id);
-    });
-  } catch (e) {
-    console.error('onActivated handler error', e);
-  }
-});
-
-// Tab removed -> end its session
-chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-  try {
-    await endSessionForTab(tabId);
-  } catch (e) {
-    console.error('onRemoved handler error', e);
-  }
-});
-
-// flush incremental time for all open sessions into `activity`
-async function saveCurrentTime() {
-  const now = Date.now();
-  const tabIds = Object.keys(tabsData);
-  for (const t of tabIds) {
-    const td = tabsData[t];
-    if (!td || !td.domain) continue;
-    const last = td.lastCheckpoint || td.sessionStart || now;
-    const deltaMs = now - last;
-    const deltaSec = Math.floor(deltaMs / 1000);
-    if (deltaSec > 0) {
-      await addSecondsToActivity(td.domain, deltaSec);
-      td.lastCheckpoint = now;
-    }
-  }
-}
-
-function extractDomain(url) {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.hostname;
-  } catch (e) {
-    return null;
-  }
-}
-
-function getTodayString() {
-  const now = new Date();
-  return now.toISOString().split('T')[0]; // YYYY-MM-DD
-}
-
-function getDayOfWeek() {
-  return new Date().getDay(); // 0 = Sunday, 6 = Saturday
-}
-
-async function checkAndNotify() {
-  await saveCurrentTime();
-  
-  chrome.storage.local.get(['settings', 'activity', 'notifiedToday'], (result) => {
-    if (!result) return;
-    const settings = result.settings || { limits: {}, notificationThreshold: 0.9 };
-    const activity = result.activity || {};
-    const notifiedToday = result.notifiedToday || {};
-    const today = getTodayString();
-    const dayOfWeek = getDayOfWeek();
-    const todayActivity = activity[today] || {};
-
-    // Clean old notifications (from previous days)
-    if (Object.keys(notifiedToday).length > 0 && Object.keys(notifiedToday)[0] !== today) {
-      chrome.storage.local.set({ notifiedToday: {} });
-    }
-
-    for (const [domain, limitData] of Object.entries(settings.limits)) {
-      // Check if limit applies to today
-      if (!limitData.days || !limitData.days.includes(dayOfWeek)) {
-        continue;
-      }
-
-      const timeSpent = todayActivity[domain] || 0;
-      const limit = limitData.limit;
-      const threshold = limit * settings.notificationThreshold;
-
-      // Notify if approaching limit and haven't notified yet today
-      if (timeSpent >= threshold && timeSpent < limit && !notifiedToday[domain]) {
-        const minutesRemaining = Math.floor((limit - timeSpent) / 60);
+// event when browser starts (not just extension install/update)
+chrome.runtime.onStartup.addListener(async () => {
+    try {
+        console.log("HELLO START")
+        // Browser is starting, initialize tracking for all existing tabs
+        const windows = await chrome.windows.getAll({ populate: true });
         
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icons/icon128.png',
-          title: 'Screentime Alert',
-          message: `You have ${minutesRemaining} minutes remaining on ${domain}`,
-          priority: 2
-        });
-
-        notifiedToday[domain] = true;
-        chrome.storage.local.set({ notifiedToday });
-      }
-
-      // Notify if limit exceeded
-      if (timeSpent >= limit && notifiedToday[domain] !== 'exceeded') {
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icons/icon128.png',
-          title: 'Screentime Limit Reached',
-          message: `You've reached your daily limit for ${domain}`,
-          priority: 2
-        });
-
-        notifiedToday[domain] = 'exceeded';
-        chrome.storage.local.set({ notifiedToday });
-      }
+        for (const window of windows) {
+            for (const tab of window.tabs) {
+                if (!Aux.isEligibleUrl(tab.url)) continue;
+                
+                const tld = Aux.getTLD(tab.url);
+                
+                // Create session for this tab
+                await Storage.insertSession(tld, tab.id, tab.windowId);
+                
+                // If this tab is active and window is focused, start focus tracking
+                if (tab.active && window.focused) {
+                    const sessionId = await Storage.findActiveSessionId(tld, tab.windowId, tab.id);
+                    if (sessionId) {
+                        await Storage.insertFocus(tld, sessionId);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error in onStartup listener:', error);
     }
-  });
-}
+})
 
-// Save time before service worker stops
-chrome.runtime.onSuspend.addListener(async () => {
-  try {
-    await saveCurrentTime();
-    // close all remaining sessions
-    const tabIds = Object.keys(tabsData);
-    for (const t of tabIds) {
-      try { await endSessionForTab(t); } catch (e) { /* continue */ }
+chrome.tabs.onCreated.addListener(async (tab) => {
+    const tabId = tab.id;
+    const windowId = tab.windowId;
+    const tld = Aux.getTLD(tab.url);
+    
+    // Only track eligible URLs
+    if (!Aux.isEligibleUrl(tab.url)) {
+        return;
     }
-  } catch (e) {
-    console.error('onSuspend handler error', e);
-  }
+    
+    await Storage.insertSession(tld, tabId, windowId);
+    
+    // If this tab is active, also start focus tracking
+    if (tab.active) {
+        const sessionId = await Storage.findActiveSessionId(tld, windowId, tabId);
+        if (sessionId) {
+            // End focus on other tabs in this window first
+            await Storage.endFocusAllExcept(windowId, tabId);
+            await Storage.insertFocus(tld, sessionId);
+        }
+    }
+})
+
+// event when there is change in tab properties
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    try {
+        // Only process when URL actually changes
+        if (!changeInfo.url) {
+            return;
+        }
+        
+        const newUrl = changeInfo.url;
+        const newTld = Aux.getTLD(newUrl);
+        const newUrlEligible = Aux.isEligibleUrl(newUrl);
+        
+        // Find if there's an existing active session for this tab
+        // We need to search through all URLs since we don't know the previous URL
+        const raw = await Storage.getRaw();
+        let previousTld = null;
+        let previousSessionId = null;
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === tab.windowId && session.tabId === tabId && !session.end) {
+                    previousTld = url;
+                    previousSessionId = sessionId;
+                    break;
+                }
+            }
+            if (previousSessionId) break;
+        }
+        
+        // Determine what to do based on previous and new states
+        const hasPreviousSession = previousSessionId !== null;
+        const domainChanged = previousTld !== newTld;
+        
+        if (hasPreviousSession && (domainChanged || !newUrlEligible)) {
+            // End the previous session when:
+            // 1. Domain changed (youtube.com -> twitter.com)
+            // 2. Or navigating to ineligible URL (youtube.com -> chrome://settings)
+            await Storage.endFocus(previousTld, previousSessionId);
+            await Storage.endURLSession(previousTld, previousSessionId);
+        }
+        
+        if (newUrlEligible) {
+            if (!hasPreviousSession || domainChanged) {
+                // Create new session when:
+                // 1. No previous session exists (ineligible -> eligible)
+                // 2. Or domain changed (youtube.com -> twitter.com)
+                await Storage.insertSession(newTld, tabId, tab.windowId);
+                
+                // If this tab is currently active, also start focus
+                if (tab.active) {
+                    const newSessionId = await Storage.findActiveSessionId(newTld, tab.windowId, tabId);
+                    if (newSessionId) {
+                        await Storage.insertFocus(newTld, newSessionId);
+                    }
+                }
+            }
+            // If same domain (youtube.com/video1 -> youtube.com/video2), do nothing
+            // The session continues tracking the same domain
+        }
+    } catch (error) {
+        console.error('Error in onUpdated listener:', error);
+    }
+})
+
+// event when a tab is deactivated (loses focus)
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    try {
+        // This fires when a new tab becomes active
+        // We need to end focus on the previously active tab and start focus on the new one
+        
+        // Get the newly activated tab first to ensure it exists and is valid
+        const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
+        if (!activeTab || !activeTab.url) {
+            return; // Tab doesn't exist or has no URL yet
+        }
+        
+        // End focus on other tabs in this window
+        await Storage.endFocusAllExcept(activeInfo.windowId, activeInfo.tabId);
+        
+        const activeTld = Aux.getTLD(activeTab.url);
+        
+        // Skip if URL is not eligible for tracking
+        if (!Aux.isEligibleUrl(activeTab.url)) {
+            return;
+        }
+        
+        // Check if session exists, if not create one
+        let activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+        if (!activeSessionId) {
+            // No session exists, create one first
+            await Storage.insertSession(activeTld, activeTab.id, activeTab.windowId);
+            activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+        }
+        
+        if (activeSessionId) {
+            await Storage.insertFocus(activeTld, activeSessionId);
+        }
+    } catch (error) {
+        console.error('Error in onActivated listener:', error);
+    }
 });
+
+chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+    // Tab is already removed, so we need to find and end it from storage
+    await Storage.findAndEndSession(tabId, removeInfo.windowId);
+})
+
+// event when tab is detached from a window (e.g., dragged to become new window or moved)
+chrome.tabs.onDetached.addListener(async (tabId, detachInfo) => {
+    try {
+        // Tab is being moved, end focus (it will restart when attached)
+        // We keep the session alive but end focus during the transition
+        const raw = await Storage.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.tabId === tabId && session.windowId === detachInfo.oldWindowId && !session.end) {
+                    // End focus during detachment
+                    await Storage.endFocus(url, sessionId);
+                    break;
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error in onDetached listener:', error);
+    }
+})
+
+// event when tab is attached to a window (after being detached)
+chrome.tabs.onAttached.addListener(async (tabId, attachInfo) => {
+    try {
+        // Tab has been attached to a new window, update the windowId in session
+        const raw = await Storage.getRaw();
+        let updated = false;
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.tabId === tabId && !session.end) {
+                    // Update the windowId for this session
+                    session.windowId = attachInfo.newWindowId;
+                    updated = true;
+                    
+                    // Get tab info to check if it's active
+                    const tab = await chrome.tabs.get(tabId).catch(() => null);
+                    if (tab && tab.active) {
+                        // If tab is active in new window, start focus
+                        await Storage.endFocusAllExcept(attachInfo.newWindowId, tabId);
+                        await Storage.insertFocus(url, sessionId);
+                    }
+                    break;
+                }
+            }
+            if (updated) break;
+        }
+        
+        if (updated) {
+            await Storage.saveRaw(raw);
+        }
+    } catch (error) {
+        console.error('Error in onAttached listener:', error);
+    }
+})
+
+// event when tab is replaced (rare, but can happen with prerendering or instant navigation)
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+    try {
+        // A tab has been replaced with another tab
+        // Transfer the session from the old tab to the new tab
+        const raw = await Storage.getRaw();
+        let transferred = false;
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.tabId === removedTabId && !session.end) {
+                    // Update the tabId to the new tab
+                    session.tabId = addedTabId;
+                    transferred = true;
+                    break;
+                }
+            }
+            if (transferred) break;
+        }
+        
+        if (transferred) {
+            await Storage.saveRaw(raw);
+        }
+    } catch (error) {
+        console.error('Error in onReplaced listener:', error);
+    }
+})
+
+// event when we choose another chrome windows
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+    try {
+        if (windowId === chrome.windows.WINDOW_ID_NONE) {
+            // Browser lost focus (user switched to another application)
+            await Storage.endAllFocusGlobally();
+            return;
+        }
+        
+        // Browser gained focus on a specific window
+        // End focus on tabs in other windows
+        await Storage.endFocusInOtherWindows(windowId);
+        
+        // Get the active tab in the focused window
+        const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
+        if (tabs.length === 0) return;
+        
+        const activeTab = tabs[0];
+        if (!Aux.isEligibleUrl(activeTab.url)) return;
+        
+        const tld = Aux.getTLD(activeTab.url);
+        
+        // Ensure session exists
+        let sessionId = await Storage.findActiveSessionId(tld, activeTab.windowId, activeTab.id);
+        if (!sessionId) {
+            await Storage.insertSession(tld, activeTab.id, activeTab.windowId);
+            sessionId = await Storage.findActiveSessionId(tld, activeTab.windowId, activeTab.id);
+        }
+        
+        if (sessionId) {
+            await Storage.insertFocus(tld, sessionId);
+        }
+    } catch (error) {
+        console.error('Error in onFocusChanged listener:', error);
+    }
+})
+
+chrome.windows.onRemoved.addListener(async (windowId) => {
+    try {
+        // Window is already removed, end all sessions in this window
+        await Storage.endAllSessionsInWindow(windowId);
+    } catch (error) {
+        console.error('Error in onRemoved listener:', error);
+    }
+})
+
+// event when extension is being suspended; should be consider to end all on going records
+chrome.runtime.onSuspend.addListener(async () => {
+    // End all active sessions across all windows
+    await Storage.endAllActiveSessions();
+})

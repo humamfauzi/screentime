@@ -13,7 +13,7 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background_v2.js"
+    "service_worker": "background.js"
   },
   "action": {
     "default_popup": "popup.html",
