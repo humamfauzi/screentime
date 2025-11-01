@@ -1,0 +1,39 @@
+{
+  "name": "screentime-extension",
+  "version": "2.0.0",
+  "description": "Screen time tracking Chrome extension with comprehensive testing",
+  "main": "background_v2.js",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage"
+  },
+  "keywords": [
+    "chrome-extension",
+    "screentime",
+    "productivity"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "setupFilesAfterEnv": [
+      "<rootDir>/test-setup.js"
+    ],
+    "testMatch": [
+      "**/__tests__/**/*.test.js",
+      "**/*.test.js"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/"
+    ],
+    "collectCoverageFrom": [
+      "fn.js",
+      "background_v2.js",
+      "!node_modules/**"
+    ]
+  }
+}

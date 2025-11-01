@@ -1,490 +1,1031 @@
-/**
- * Test Suite for background_v2.js
- * 
- * This test suite validates all functionality in the background service worker.
- * Run these tests before deploying any changes to ensure integrity.
- * 
- * To run: node background_v2.test.js
- */
+// Import the modules - chrome mock is set up in test-setup.js
+const { Aux, Storage } = require('./fn.js');
 
-// =====================================================
-// MOCK CHROME API
-// =====================================================
-const mockStorage = {};
-const mockListeners = {
-    'runtime.onInstalled': [],
-    'runtime.onStartup': [],
-    'runtime.onSuspend': [],
-    'tabs.onCreated': [],
-    'tabs.onUpdated': [],
-    'tabs.onActivated': [],
-    'tabs.onRemoved': [],
-    'tabs.onDetached': [],
-    'tabs.onAttached': [],
-    'tabs.onReplaced': [],
-    'windows.onFocusChanged': [],
-    'windows.onRemoved': []
-};
+describe('Aux Class', () => {
+    describe('getTLD', () => {
+        it('should extract TLD from a standard URL', () => {
+            expect(Aux.getTLD('https://www.youtube.com/watch?v=123')).toBe('youtube.com');
+            expect(Aux.getTLD('https://www.google.com/search')).toBe('google.com');
+        });
 
-const mockTabs = {};
-const mockWindows = {};
-let nextTabId = 1;
-let nextWindowId = 1;
+        it('should handle URLs without www', () => {
+            expect(Aux.getTLD('https://github.com/user/repo')).toBe('github.com');
+        });
 
-global.chrome = {
-    storage: {
-        local: {
-            get: (keys, callback) => {
-                const result = {};
-                keys.forEach(key => {
-                    result[key] = mockStorage[key];
-                });
-                if (callback) callback(result);
-                return Promise.resolve(result);
-            },
-            set: (obj, callback) => {
-                Object.assign(mockStorage, obj);
-                if (callback) callback();
-                return Promise.resolve();
+        it('should handle subdomain URLs', () => {
+            expect(Aux.getTLD('https://mail.google.com')).toBe('google.com');
+        });
+
+        it('should handle URLs with ports', () => {
+            expect(Aux.getTLD('http://localhost:3000/path')).toBe('localhost');
+        });
+
+        it('should handle URLs with multiple subdomains', () => {
+            expect(Aux.getTLD('https://api.dev.example.com')).toBe('example.com');
+        });
+
+        it('should return original URL on error', () => {
+            expect(Aux.getTLD('not-a-valid-url')).toBe('not-a-valid-url');
+        });
+    });
+
+    describe('generateId', () => {
+        it('should generate a 6-character ID', () => {
+            const id = Aux.generateId();
+            expect(id).toHaveLength(6);
+        });
+
+        it('should only contain alphanumeric uppercase characters', () => {
+            const id = Aux.generateId();
+            expect(id).toMatch(/^[A-Z0-9]{6}$/);
+        });
+
+        it('should generate unique IDs', () => {
+            const ids = new Set();
+            for (let i = 0; i < 100; i++) {
+                ids.add(Aux.generateId());
             }
-        }
-    },
-    tabs: {
-        get: (tabId, callback) => {
-            const tab = mockTabs[tabId];
-            if (!tab) {
-                const error = new Error('Tab not found');
-                if (callback) callback(null);
-                return Promise.reject(error);
-            }
-            if (callback) callback(tab);
-            return Promise.resolve(tab);
-        },
-        query: (queryInfo, callback) => {
-            let tabs = Object.values(mockTabs);
-            if (queryInfo.windowId !== undefined) {
-                tabs = tabs.filter(t => t.windowId === queryInfo.windowId);
-            }
-            if (queryInfo.active !== undefined) {
-                tabs = tabs.filter(t => t.active === queryInfo.active);
-            }
-            if (callback) callback(tabs);
-            return Promise.resolve(tabs);
-        },
-        onCreated: { addListener: (fn) => mockListeners['tabs.onCreated'].push(fn) },
-        onUpdated: { addListener: (fn) => mockListeners['tabs.onUpdated'].push(fn) },
-        onActivated: { addListener: (fn) => mockListeners['tabs.onActivated'].push(fn) },
-        onRemoved: { addListener: (fn) => mockListeners['tabs.onRemoved'].push(fn) },
-        onDetached: { addListener: (fn) => mockListeners['tabs.onDetached'].push(fn) },
-        onAttached: { addListener: (fn) => mockListeners['tabs.onAttached'].push(fn) },
-        onReplaced: { addListener: (fn) => mockListeners['tabs.onReplaced'].push(fn) }
-    },
-    windows: {
-        WINDOW_ID_NONE: -1,
-        getAll: (options, callback) => {
-            let windows = Object.values(mockWindows);
-            if (options && options.populate) {
-                windows = windows.map(w => ({
-                    ...w,
-                    tabs: Object.values(mockTabs).filter(t => t.windowId === w.id)
-                }));
-            }
-            if (callback) callback(windows);
-            return Promise.resolve(windows);
-        },
-        onFocusChanged: { addListener: (fn) => mockListeners['windows.onFocusChanged'].push(fn) },
-        onRemoved: { addListener: (fn) => mockListeners['windows.onRemoved'].push(fn) }
-    },
-    runtime: {
-        onInstalled: { addListener: (fn) => mockListeners['runtime.onInstalled'].push(fn) },
-        onStartup: { addListener: (fn) => mockListeners['runtime.onStartup'].push(fn) },
-        onSuspend: { addListener: (fn) => mockListeners['runtime.onSuspend'].push(fn) }
-    }
-};
+            // Allow some collisions but expect mostly unique
+            expect(ids.size).toBeGreaterThan(85);
+        });
 
-// =====================================================
-// HELPER FUNCTIONS
-// =====================================================
-function resetMocks() {
-    Object.keys(mockStorage).forEach(key => delete mockStorage[key]);
-    Object.keys(mockTabs).forEach(key => delete mockTabs[key]);
-    Object.keys(mockWindows).forEach(key => delete mockWindows[key]);
-    nextTabId = 1;
-    nextWindowId = 1;
-}
-
-function createMockWindow(focused = true) {
-    const id = nextWindowId++;
-    mockWindows[id] = { id, focused };
-    return mockWindows[id];
-}
-
-function createMockTab(windowId, url, active = false) {
-    const id = nextTabId++;
-    mockTabs[id] = { id, windowId, url, active };
-    return mockTabs[id];
-}
-
-function removeMockTab(tabId) {
-    delete mockTabs[tabId];
-}
-
-async function triggerEvent(eventName, ...args) {
-    const listeners = mockListeners[eventName];
-    for (const listener of listeners) {
-        await listener(...args);
-    }
-}
-
-function assertEqual(actual, expected, message) {
-    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-        console.error(`❌ FAIL: ${message}`);
-        console.error(`   Expected:`, expected);
-        console.error(`   Got:`, actual);
-        return false;
-    }
-    console.log(`✅ PASS: ${message}`);
-    return true;
-}
-
-function assertTruthy(value, message) {
-    if (!value) {
-        console.error(`❌ FAIL: ${message}`);
-        console.error(`   Expected truthy value, got:`, value);
-        return false;
-    }
-    console.log(`✅ PASS: ${message}`);
-    return true;
-}
-
-function assertFalsy(value, message) {
-    if (value) {
-        console.error(`❌ FAIL: ${message}`);
-        console.error(`   Expected falsy value, got:`, value);
-        return false;
-    }
-    console.log(`✅ PASS: ${message}`);
-    return true;
-}
-
-// Load the background script (simulating it)
-function loadBackgroundScript() {
-    // We'll need to extract and evaluate the code
-    // For now, let's define the classes here for testing
-    eval(require('fs').readFileSync('./background_v2.js', 'utf8'));
-}
-
-// =====================================================
-// TEST SUITE
-// =====================================================
-
-class TestRunner {
-    constructor() {
-        this.passed = 0;
-        this.failed = 0;
-        this.tests = [];
-    }
-
-    async test(name, fn) {
-        console.log(`\n🧪 Testing: ${name}`);
-        try {
-            resetMocks();
-            const result = await fn();
-            if (result !== false) {
-                this.passed++;
-            } else {
-                this.failed++;
-            }
-        } catch (error) {
-            console.error(`❌ ERROR in test "${name}":`, error.message);
-            this.failed++;
-        }
-    }
-
-    report() {
-        console.log('\n' + '='.repeat(60));
-        console.log('TEST RESULTS');
-        console.log('='.repeat(60));
-        console.log(`✅ Passed: ${this.passed}`);
-        console.log(`❌ Failed: ${this.failed}`);
-        console.log(`📊 Total: ${this.passed + this.failed}`);
-        console.log('='.repeat(60));
-        
-        if (this.failed === 0) {
-            console.log('🎉 All tests passed!');
-        } else {
-            console.log('⚠️  Some tests failed. Please review.');
-        }
-    }
-}
-
-// =====================================================
-// DEFINE TEST FUNCTIONS (to be run with real code)
-// =====================================================
-
-async function runTests() {
-    const runner = new TestRunner();
-
-    // Test 1: Aux.getTLD
-    await runner.test('Aux.getTLD - extracts domain correctly', () => {
-        const tests = [
-            { input: 'https://www.youtube.com/watch?v=123', expected: 'youtube.com' },
-            { input: 'https://mail.google.com', expected: 'google.com' },
-            { input: 'https://github.com/user/repo', expected: 'github.com' },
-            { input: 'http://localhost:3000', expected: 'localhost' },
-            { input: 'https://www.bbc.co.uk', expected: 'co.uk' }
-        ];
-        
-        let allPassed = true;
-        for (const { input, expected } of tests) {
-            const result = Aux.getTLD(input);
-            if (!assertEqual(result, expected, `getTLD("${input}") should return "${expected}"`)) {
-                allPassed = false;
-            }
-        }
-        return allPassed;
+        it('should generate different IDs on consecutive calls', () => {
+            const id1 = Aux.generateId();
+            const id2 = Aux.generateId();
+            const id3 = Aux.generateId();
+            // Very unlikely all three are the same
+            expect(id1 === id2 && id2 === id3).toBe(false);
+        });
     });
 
-    // Test 2: Aux.isEligibleUrl
-    await runner.test('Aux.isEligibleUrl - filters ineligible URLs', () => {
-        const eligible = [
-            'https://youtube.com',
-            'http://example.com',
-            'https://github.com/repo'
-        ];
-        const ineligible = [
-            'chrome://settings',
-            'chrome-extension://abc123',
-            'about:blank',
-            'file:///path/to/file',
-            null,
-            undefined
-        ];
-        
-        let allPassed = true;
-        for (const url of eligible) {
-            if (!assertTruthy(Aux.isEligibleUrl(url), `"${url}" should be eligible`)) {
-                allPassed = false;
-            }
-        }
-        for (const url of ineligible) {
-            if (!assertFalsy(Aux.isEligibleUrl(url), `"${url}" should be ineligible`)) {
-                allPassed = false;
-            }
-        }
-        return allPassed;
+    describe('isEligibleUrl', () => {
+        it('should return true for http/https URLs', () => {
+            expect(Aux.isEligibleUrl('https://youtube.com')).toBe(true);
+            expect(Aux.isEligibleUrl('http://example.com')).toBe(true);
+            expect(Aux.isEligibleUrl('https://www.google.com/search?q=test')).toBe(true);
+        });
+
+        it('should return false for chrome:// URLs', () => {
+            expect(Aux.isEligibleUrl('chrome://settings')).toBe(false);
+            expect(Aux.isEligibleUrl('chrome://extensions')).toBe(false);
+            expect(Aux.isEligibleUrl('chrome://newtab')).toBe(false);
+        });
+
+        it('should return false for chrome-extension:// URLs', () => {
+            expect(Aux.isEligibleUrl('chrome-extension://abcdef123456')).toBe(false);
+        });
+
+        it('should return false for about: URLs', () => {
+            expect(Aux.isEligibleUrl('about:blank')).toBe(false);
+            expect(Aux.isEligibleUrl('about:config')).toBe(false);
+        });
+
+        it('should return false for file:// URLs', () => {
+            expect(Aux.isEligibleUrl('file:///home/user/file.html')).toBe(false);
+        });
+
+        it('should return false for edge:// URLs', () => {
+            expect(Aux.isEligibleUrl('edge://settings')).toBe(false);
+        });
+
+        it('should return false for moz-extension:// URLs', () => {
+            expect(Aux.isEligibleUrl('moz-extension://abc123')).toBe(false);
+        });
+
+        it('should return false for null/undefined', () => {
+            expect(Aux.isEligibleUrl(null)).toBe(false);
+            expect(Aux.isEligibleUrl(undefined)).toBe(false);
+            expect(Aux.isEligibleUrl('')).toBe(false);
+        });
+    });
+});
+
+describe('Storage Class', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        // Default mock implementation
+        chrome.storage.local.get.mockResolvedValue({ raw: {} });
+        chrome.storage.local.set.mockResolvedValue(undefined);
     });
 
-    // Test 3: Storage.insertSession
-    await runner.test('Storage.insertSession - creates new session', async () => {
-        await Storage.insertSession('youtube.com', 1, 1);
-        const raw = await Storage.getRaw();
-        
-        const hasYoutube = raw['youtube.com'] !== undefined;
-        const sessionCount = hasYoutube ? Object.keys(raw['youtube.com']).length : 0;
-        
-        return assertTruthy(hasYoutube, 'youtube.com should exist in storage') &&
-               assertEqual(sessionCount, 1, 'Should have 1 session');
+    describe('getRaw', () => {
+        it('should return stored raw data', async () => {
+            const mockData = { 'youtube.com': { 'ABC123': {} } };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            const result = await Storage.getRaw();
+            expect(result).toEqual(mockData);
+            expect(chrome.storage.local.get).toHaveBeenCalledWith(['raw']);
+        });
+
+        it('should return empty object if no data exists', async () => {
+            chrome.storage.local.get.mockResolvedValue({});
+
+            const result = await Storage.getRaw();
+            expect(result).toEqual({});
+        });
+
+        it('should handle storage errors gracefully', async () => {
+            chrome.storage.local.get.mockRejectedValue(new Error('Storage error'));
+
+            await expect(Storage.getRaw()).rejects.toThrow('Storage error');
+        });
     });
 
-    // Test 4: Storage.findActiveSessionId
-    await runner.test('Storage.findActiveSessionId - finds correct session', async () => {
-        await Storage.insertSession('youtube.com', 5, 1);
-        const sessionId = await Storage.findActiveSessionId('youtube.com', 1, 5);
-        
-        return assertTruthy(sessionId, 'Should find active session');
+    describe('saveRaw', () => {
+        it('should save raw data to storage', async () => {
+            const mockData = { 'youtube.com': {} };
+
+            await Storage.saveRaw(mockData);
+            expect(chrome.storage.local.set).toHaveBeenCalledWith({ raw: mockData });
+        });
+
+        it('should save empty object', async () => {
+            await Storage.saveRaw({});
+            expect(chrome.storage.local.set).toHaveBeenCalledWith({ raw: {} });
+        });
     });
 
-    // Test 5: Storage.endURLSession
-    await runner.test('Storage.endURLSession - ends session correctly', async () => {
-        await Storage.insertSession('youtube.com', 1, 1);
-        const sessionId = await Storage.findActiveSessionId('youtube.com', 1, 1);
-        await Storage.endURLSession('youtube.com', sessionId);
-        
-        const raw = await Storage.getRaw();
-        const session = raw['youtube.com'][sessionId];
-        
-        return assertTruthy(session.end, 'Session should have end timestamp') &&
-               assertTruthy(session.total, 'Session should have total duration');
-    });
+    describe('findActiveSessionId', () => {
+        it('should return null for ineligible URLs', async () => {
+            const result = await Storage.findActiveSessionId('chrome://settings', 1, 1);
+            expect(result).toBeNull();
+            expect(chrome.storage.local.get).not.toHaveBeenCalled();
+        });
 
-    // Test 6: Storage.insertFocus
-    await runner.test('Storage.insertFocus - creates focus record', async () => {
-        await Storage.insertSession('youtube.com', 1, 1);
-        const sessionId = await Storage.findActiveSessionId('youtube.com', 1, 1);
-        await Storage.insertFocus('youtube.com', sessionId);
-        
-        const raw = await Storage.getRaw();
-        const session = raw['youtube.com'][sessionId];
-        const focusCount = session.focus ? Object.keys(session.focus).length : 0;
-        
-        return assertEqual(focusCount, 1, 'Should have 1 focus record');
-    });
+        it('should return null if URL has no sessions', async () => {
+            chrome.storage.local.get.mockResolvedValue({ raw: {} });
 
-    // Test 7: Storage.endFocus
-    await runner.test('Storage.endFocus - ends focus correctly', async () => {
-        await Storage.insertSession('youtube.com', 1, 1);
-        const sessionId = await Storage.findActiveSessionId('youtube.com', 1, 1);
-        await Storage.insertFocus('youtube.com', sessionId);
-        await Storage.endFocus('youtube.com', sessionId);
-        
-        const raw = await Storage.getRaw();
-        const session = raw['youtube.com'][sessionId];
-        const focuses = Object.values(session.focus || {});
-        const activeFocus = focuses.find(f => !f.end);
-        
-        return assertFalsy(activeFocus, 'Should have no active focus');
-    });
+            const result = await Storage.findActiveSessionId('youtube.com', 1, 1);
+            expect(result).toBeNull();
+        });
 
-    // Test 8: Tab creation scenario
-    await runner.test('Tab Lifecycle - create and track tab', async () => {
-        const window = createMockWindow(true);
-        const tab = createMockTab(window.id, 'https://youtube.com', true);
-        
-        await triggerEvent('tabs.onCreated', tab);
-        
-        const sessionId = await Storage.findActiveSessionId('youtube.com', window.id, tab.id);
-        return assertTruthy(sessionId, 'Session should be created for new tab');
-    });
-
-    // Test 9: Tab removal scenario
-    await runner.test('Tab Lifecycle - remove tab ends session', async () => {
-        const window = createMockWindow(true);
-        const tab = createMockTab(window.id, 'https://youtube.com', false);
-        
-        await triggerEvent('tabs.onCreated', tab);
-        const sessionId = await Storage.findActiveSessionId('youtube.com', window.id, tab.id);
-        
-        await triggerEvent('tabs.onRemoved', tab.id, { windowId: window.id });
-        
-        const raw = await Storage.getRaw();
-        const session = raw['youtube.com'][sessionId];
-        
-        return assertTruthy(session.end, 'Session should be ended after tab removal');
-    });
-
-    // Test 10: URL navigation scenario
-    await runner.test('Navigation - changing domain creates new session', async () => {
-        const window = createMockWindow(true);
-        const tab = createMockTab(window.id, 'https://youtube.com', false);
-        
-        await triggerEvent('tabs.onCreated', tab);
-        const oldSessionId = await Storage.findActiveSessionId('youtube.com', window.id, tab.id);
-        
-        tab.url = 'https://twitter.com';
-        await triggerEvent('tabs.onUpdated', tab.id, { url: 'https://twitter.com' }, tab);
-        
-        const raw = await Storage.getRaw();
-        const oldSession = raw['youtube.com'][oldSessionId];
-        const newSessionId = await Storage.findActiveSessionId('twitter.com', window.id, tab.id);
-        
-        return assertTruthy(oldSession.end, 'Old session should be ended') &&
-               assertTruthy(newSessionId, 'New session should be created');
-    });
-
-    // Test 11: Window focus change
-    await runner.test('Window - losing focus ends all focus', async () => {
-        const window = createMockWindow(true);
-        const tab = createMockTab(window.id, 'https://youtube.com', true);
-        
-        await triggerEvent('tabs.onCreated', tab);
-        const sessionId = await Storage.findActiveSessionId('youtube.com', window.id, tab.id);
-        await Storage.insertFocus('youtube.com', sessionId);
-        
-        await triggerEvent('windows.onFocusChanged', chrome.windows.WINDOW_ID_NONE);
-        
-        const raw = await Storage.getRaw();
-        const session = raw['youtube.com'][sessionId];
-        const focuses = Object.values(session.focus || {});
-        const activeFocus = focuses.find(f => !f.end);
-        
-        return assertFalsy(activeFocus, 'All focus should be ended when browser loses focus');
-    });
-
-    // Test 12: Helper method - findAndEndSession
-    await runner.test('Helper - findAndEndSession works correctly', async () => {
-        await Storage.insertSession('youtube.com', 10, 5);
-        const result = await Storage.findAndEndSession(10, 5);
-        
-        const sessionId = await Storage.findActiveSessionId('youtube.com', 5, 10);
-        
-        return assertTruthy(result, 'Should return true when session found') &&
-               assertFalsy(sessionId, 'Session should be ended');
-    });
-
-    // Test 13: Helper method - endAllFocusGlobally
-    await runner.test('Helper - endAllFocusGlobally ends all focus', async () => {
-        await Storage.insertSession('youtube.com', 1, 1);
-        await Storage.insertSession('twitter.com', 2, 1);
-        
-        const session1 = await Storage.findActiveSessionId('youtube.com', 1, 1);
-        const session2 = await Storage.findActiveSessionId('twitter.com', 1, 2);
-        
-        await Storage.insertFocus('youtube.com', session1);
-        await Storage.insertFocus('twitter.com', session2);
-        
-        await Storage.endAllFocusGlobally();
-        
-        const raw = await Storage.getRaw();
-        let allEnded = true;
-        
-        for (const url in raw) {
-            for (const sessionId in raw[url]) {
-                const session = raw[url][sessionId];
-                if (session.focus) {
-                    const activeFocus = Object.values(session.focus).find(f => !f.end);
-                    if (activeFocus) allEnded = false;
+        it('should return sessionId for active session', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now()
+                    }
                 }
-            }
-        }
-        
-        return assertTruthy(allEnded, 'All focus should be ended globally');
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            const result = await Storage.findActiveSessionId('youtube.com', 1, 5);
+            expect(result).toBe('ABC123');
+        });
+
+        it('should return null if session has ended', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        end: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            const result = await Storage.findActiveSessionId('youtube.com', 1, 5);
+            expect(result).toBeNull();
+        });
+
+        it('should handle multiple sessions and find correct one', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        end: Date.now()
+                    },
+                    'DEF456': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            const result = await Storage.findActiveSessionId('youtube.com', 1, 5);
+            expect(result).toBe('DEF456');
+        });
     });
 
-    // Test 14: Helper method - endAllSessionsInWindow
-    await runner.test('Helper - endAllSessionsInWindow ends sessions in specific window', async () => {
-        await Storage.insertSession('youtube.com', 1, 1);
-        await Storage.insertSession('twitter.com', 2, 2);
-        
-        await Storage.endAllSessionsInWindow(1);
-        
-        const session1 = await Storage.findActiveSessionId('youtube.com', 1, 1);
-        const session2 = await Storage.findActiveSessionId('twitter.com', 2, 2);
-        
-        return assertFalsy(session1, 'Window 1 session should be ended') &&
-               assertTruthy(session2, 'Window 2 session should still be active');
+    describe('insertSession', () => {
+        it('should not insert session for ineligible URLs', async () => {
+            await Storage.insertSession('chrome://settings', 1, 1);
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should insert new session for new URL', async () => {
+            chrome.storage.local.get.mockResolvedValue({ raw: {} });
+
+            await Storage.insertSession('youtube.com', 5, 1);
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']).toBeDefined();
+            const sessionId = Object.keys(savedData['youtube.com'])[0];
+            expect(savedData['youtube.com'][sessionId]).toMatchObject({
+                tabId: 5,
+                windowId: 1
+            });
+            expect(savedData['youtube.com'][sessionId].start).toBeDefined();
+            expect(typeof savedData['youtube.com'][sessionId].start).toBe('number');
+        });
+
+        it('should add session to existing URL', async () => {
+            const existingData = {
+                'youtube.com': {
+                    'OLD123': { windowId: 1, tabId: 3, start: Date.now() }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: existingData });
+
+            await Storage.insertSession('youtube.com', 5, 1);
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(Object.keys(savedData['youtube.com'])).toHaveLength(2);
+            expect(savedData['youtube.com']['OLD123']).toBeDefined();
+        });
     });
 
-    // Test 15: Ineligible URL handling
-    await runner.test('Ineligible URLs - chrome:// URLs are ignored', async () => {
-        await Storage.insertSession('chrome://settings', 1, 1);
-        const raw = await Storage.getRaw();
-        const hasChromeUrl = raw['chrome://settings'] !== undefined;
+    describe('insertFocus', () => {
+        it('should not insert focus for ineligible URLs', async () => {
+            await Storage.insertFocus('chrome://settings', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should return early if URL has no sessions', async () => {
+            chrome.storage.local.get.mockResolvedValue({ raw: {} });
+
+            await Storage.insertFocus('youtube.com', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should return early if session does not exist', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'OTHER123': { windowId: 1, tabId: 5 }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.insertFocus('youtube.com', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should insert focus to existing session', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.insertFocus('youtube.com', 'ABC123');
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].focus).toBeDefined();
+            const focusId = Object.keys(savedData['youtube.com']['ABC123'].focus)[0];
+            expect(savedData['youtube.com']['ABC123'].focus[focusId]).toMatchObject({
+                start: expect.any(Number)
+            });
+            expect(savedData['youtube.com']['ABC123'].focus[focusId].end).toBeUndefined();
+        });
+
+        it('should create focus object if it does not exist', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.insertFocus('youtube.com', 'ABC123');
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].focus).toBeDefined();
+            expect(typeof savedData['youtube.com']['ABC123'].focus).toBe('object');
+        });
+    });
+
+    describe('endURLSession', () => {
+        it('should not end session for ineligible URLs', async () => {
+            await Storage.endURLSession('chrome://settings', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should end active session', async () => {
+            const startTime = Date.now() - 5000;
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: startTime
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endURLSession('youtube.com', 'ABC123');
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].end).toBeDefined();
+            expect(savedData['youtube.com']['ABC123'].total).toBeGreaterThan(0);
+            expect(savedData['youtube.com']['ABC123'].total).toBeGreaterThanOrEqual(5000);
+        });
+
+        it('should not end already ended session', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now() - 5000,
+                        end: Date.now(),
+                        total: 5000
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endURLSession('youtube.com', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should return early if URL has no sessions', async () => {
+            chrome.storage.local.get.mockResolvedValue({ raw: {} });
+
+            await Storage.endURLSession('youtube.com', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('endFocus', () => {
+        it('should not end focus for ineligible URLs', async () => {
+            await Storage.endFocus('chrome://settings', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should end active focus', async () => {
+            const startTime = Date.now() - 3000;
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        focus: {
+                            'FOC123': { start: startTime }
+                        }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endFocus('youtube.com', 'ABC123');
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].focus['FOC123'].end).toBeDefined();
+            expect(savedData['youtube.com']['ABC123'].focus['FOC123'].total).toBeGreaterThan(0);
+            expect(savedData['youtube.com']['ABC123'].focus['FOC123'].total).toBeGreaterThanOrEqual(3000);
+        });
+
+        it('should not end focus if no active focus exists', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        focus: {
+                            'FOC123': { start: Date.now(), end: Date.now(), total: 1000 }
+                        }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endFocus('youtube.com', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should return early if session does not exist', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'OTHER123': { windowId: 1, tabId: 5 }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endFocus('youtube.com', 'ABC123');
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('endFocusAllExcept', () => {
+        it('should end focus on all tabs in window except selected one', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 1,
+                        tabId: 6,
+                        focus: { 'FOC2': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endFocusAllExcept(1, 5);
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            // Tab 5 focus should still be active
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeUndefined();
+            // Tab 6 focus should be ended
+            expect(savedData['twitter.com']['DEF456'].focus['FOC2'].end).toBeDefined();
+            expect(savedData['twitter.com']['DEF456'].focus['FOC2'].total).toBeDefined();
+        });
+
+        it('should not affect tabs in different windows', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 2,
+                        tabId: 10,
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endFocusAllExcept(1, 5);
+
+            // Should not call set since no tabs in window 1 match
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('findAndEndSession', () => {
+        it('should find and end session by tabId and windowId', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            const result = await Storage.findAndEndSession(5, 1);
+
+            expect(result).toBe(true);
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].end).toBeDefined();
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeDefined();
+        });
+
+        it('should return false if session not found', async () => {
+            chrome.storage.local.get.mockResolvedValue({ raw: {} });
+
+            const result = await Storage.findAndEndSession(5, 1);
+            expect(result).toBe(false);
+        });
+    });
+
+    describe('endAllFocusInWindow', () => {
+        it('should end all focus in specified window', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 1,
+                        tabId: 6,
+                        focus: { 'FOC2': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllFocusInWindow(1);
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeDefined();
+            expect(savedData['twitter.com']['DEF456'].focus['FOC2'].end).toBeDefined();
+        });
+
+        it('should exclude specified tab when exceptTabId is provided', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 1,
+                        tabId: 6,
+                        focus: { 'FOC2': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllFocusInWindow(1, 5);
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeUndefined();
+            expect(savedData['twitter.com']['DEF456'].focus['FOC2'].end).toBeDefined();
+        });
+    });
+
+    describe('endAllFocusGlobally', () => {
+        it('should end all active focus across all windows', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 2,
+                        tabId: 10,
+                        focus: { 'FOC2': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllFocusGlobally();
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeDefined();
+            expect(savedData['twitter.com']['DEF456'].focus['FOC2'].end).toBeDefined();
+        });
+    });
+
+    describe('endAllSessionsInWindow', () => {
+        it('should end all active sessions in specified window', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 1,
+                        tabId: 6,
+                        start: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllSessionsInWindow(1);
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].end).toBeDefined();
+            expect(savedData['twitter.com']['DEF456'].end).toBeDefined();
+        });
+
+        it('should not affect sessions in other windows', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 2,
+                        tabId: 10,
+                        start: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllSessionsInWindow(1);
+
+            // Should not call set since no sessions in window 1
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('endAllActiveSessions', () => {
+        it('should end all active sessions globally', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 2,
+                        tabId: 10,
+                        start: Date.now()
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllActiveSessions();
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            expect(savedData['youtube.com']['ABC123'].end).toBeDefined();
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeDefined();
+            expect(savedData['twitter.com']['DEF456'].end).toBeDefined();
+        });
+
+        it('should not affect already ended sessions', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now() - 10000,
+                        end: Date.now() - 5000,
+                        total: 5000
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endAllActiveSessions();
+
+            // Should not call set since session is already ended
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('endFocusInOtherWindows', () => {
+        it('should end focus in all windows except specified one', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                },
+                'twitter.com': {
+                    'DEF456': {
+                        windowId: 2,
+                        tabId: 10,
+                        focus: { 'FOC2': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await Storage.endFocusInOtherWindows(1);
+
+            const savedData = chrome.storage.local.set.mock.calls[0][0].raw;
+            // Window 1 focus should remain active
+            expect(savedData['youtube.com']['ABC123'].focus['FOC1'].end).toBeUndefined();
+            // Window 2 focus should be ended
+            expect(savedData['twitter.com']['DEF456'].focus['FOC2'].end).toBeDefined();
+        });
+    });
+});
+
+describe('Background Event Handlers', () => {
+    let handlers;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        chrome.storage.local.get.mockResolvedValue({ raw: {} });
+        chrome.storage.local.set.mockResolvedValue(undefined);
         
-        return assertFalsy(hasChromeUrl, 'chrome:// URLs should not be tracked');
+        // Clear previous listeners
+        handlers = {};
+        
+        // Capture listeners
+        chrome.runtime.onInstalled.addListener.mockImplementation((fn) => {
+            handlers.onInstalled = fn;
+        });
+        chrome.runtime.onStartup.addListener.mockImplementation((fn) => {
+            handlers.onStartup = fn;
+        });
+        chrome.tabs.onCreated.addListener.mockImplementation((fn) => {
+            handlers.onCreated = fn;
+        });
+        chrome.tabs.onUpdated.addListener.mockImplementation((fn) => {
+            handlers.onUpdated = fn;
+        });
+        chrome.tabs.onActivated.addListener.mockImplementation((fn) => {
+            handlers.onActivated = fn;
+        });
+        chrome.tabs.onRemoved.addListener.mockImplementation((fn) => {
+            handlers.onRemoved = fn;
+        });
+        chrome.windows.onFocusChanged.addListener.mockImplementation((fn) => {
+            handlers.onFocusChanged = fn;
+        });
+        chrome.windows.onRemoved.addListener.mockImplementation((fn) => {
+            handlers.onWindowRemoved = fn;
+        });
+        chrome.runtime.onSuspend.addListener.mockImplementation((fn) => {
+            handlers.onSuspend = fn;
+        });
+
+        // Load the background script to register handlers
+        jest.isolateModules(() => {
+            require('./background_v2.js');
+        });
     });
 
-    runner.report();
-}
+    describe('onInstalled', () => {
+        it('should initialize empty raw data', async () => {
+            await handlers.onInstalled();
 
-// =====================================================
-// RUN TESTS
-// =====================================================
-
-console.log('='.repeat(60));
-console.log('BACKGROUND SERVICE WORKER TEST SUITE');
-console.log('='.repeat(60));
-
-try {
-    // Load the actual background script classes
-    loadBackgroundScript();
-    runTests().catch(error => {
-        console.error('Test suite failed:', error);
+            expect(chrome.storage.local.set).toHaveBeenCalledWith({ raw: {} });
+        });
     });
-} catch (error) {
-    console.error('Failed to load background script:', error.message);
-    console.log('\n⚠️  Manual Testing Required:');
-    console.log('1. Load extension in Chrome');
-    console.log('2. Open DevTools > Service Worker > Console');
-    console.log('3. Copy and paste test scenarios manually');
-}
+
+    describe('onStartup', () => {
+        it('should initialize sessions for existing tabs', async () => {
+            const mockWindows = [
+                {
+                    focused: true,
+                    tabs: [
+                        { id: 1, windowId: 1, url: 'https://youtube.com', active: true },
+                        { id: 2, windowId: 1, url: 'https://twitter.com', active: false }
+                    ]
+                }
+            ];
+            chrome.windows.getAll.mockResolvedValue(mockWindows);
+
+            await handlers.onStartup();
+
+            // Should create sessions for both tabs
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+
+        it('should skip ineligible URLs', async () => {
+            const mockWindows = [
+                {
+                    focused: true,
+                    tabs: [
+                        { id: 1, windowId: 1, url: 'chrome://settings', active: true }
+                    ]
+                }
+            ];
+            chrome.windows.getAll.mockResolvedValue(mockWindows);
+
+            await handlers.onStartup();
+
+            // Should not create session for chrome:// URL
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+
+        it('should handle errors gracefully', async () => {
+            chrome.windows.getAll.mockRejectedValue(new Error('Windows API error'));
+
+            await expect(handlers.onStartup()).resolves.not.toThrow();
+        });
+    });
+
+    describe('onCreated', () => {
+        it('should create session for new eligible tab', async () => {
+            const tab = {
+                id: 5,
+                windowId: 1,
+                url: 'https://youtube.com',
+                active: true
+            };
+
+            await handlers.onCreated(tab);
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+
+        it('should not create session for ineligible tab', async () => {
+            // Clear previous calls
+            jest.clearAllMocks();
+            chrome.storage.local.get.mockResolvedValue({ raw: {} });
+
+            const tab = {
+                id: 5,
+                windowId: 1,
+                url: 'chrome://settings',
+                active: true
+            };
+
+            await handlers.onCreated(tab);
+
+            // Should not create session for chrome:// URL
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('onUpdated', () => {
+        it('should handle URL changes', async () => {
+            const changeInfo = { url: 'https://twitter.com' };
+            const tab = { id: 5, windowId: 1, url: 'https://twitter.com' };
+            
+            chrome.storage.local.get.mockResolvedValue({
+                raw: {
+                    'youtube.com': {
+                        'ABC123': {
+                            windowId: 1,
+                            tabId: 5,
+                            start: Date.now(),
+                            focus: { 'FOC1': { start: Date.now() } }
+                        }
+                    }
+                }
+            });
+
+            await handlers.onUpdated(5, changeInfo, tab);
+
+            // Should end old session and create new one
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+
+        it('should ignore non-URL changes', async () => {
+            const changeInfo = { status: 'complete' };
+            const tab = { id: 5, windowId: 1, url: 'https://youtube.com' };
+
+            await handlers.onUpdated(5, changeInfo, tab);
+
+            expect(chrome.storage.local.set).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('onActivated', () => {
+        it('should switch focus to newly activated tab', async () => {
+            chrome.tabs.get.mockResolvedValue({
+                id: 5,
+                windowId: 1,
+                url: 'https://youtube.com'
+            });
+            
+            chrome.storage.local.get.mockResolvedValue({
+                raw: {
+                    'youtube.com': {
+                        'ABC123': {
+                            windowId: 1,
+                            tabId: 5,
+                            start: Date.now()
+                        }
+                    }
+                }
+            });
+
+            await handlers.onActivated({ tabId: 5, windowId: 1 });
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+
+        it('should handle tab that does not exist', async () => {
+            chrome.tabs.get.mockRejectedValue(new Error('Tab not found'));
+
+            await expect(handlers.onActivated({ tabId: 999, windowId: 1 })).resolves.not.toThrow();
+        });
+    });
+
+    describe('onRemoved', () => {
+        it('should end session when tab is removed', async () => {
+            chrome.storage.local.get.mockResolvedValue({
+                raw: {
+                    'youtube.com': {
+                        'ABC123': {
+                            windowId: 1,
+                            tabId: 5,
+                            start: Date.now(),
+                            focus: { 'FOC1': { start: Date.now() } }
+                        }
+                    }
+                }
+            });
+
+            await handlers.onRemoved(5, { windowId: 1, isWindowClosing: false });
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+    });
+
+    describe('onFocusChanged', () => {
+        it('should handle window focus change', async () => {
+            chrome.tabs.query.mockResolvedValue([
+                { id: 5, windowId: 1, url: 'https://youtube.com', active: true }
+            ]);
+            
+            chrome.storage.local.get.mockResolvedValue({
+                raw: {
+                    'youtube.com': {
+                        'ABC123': {
+                            windowId: 1,
+                            tabId: 5,
+                            start: Date.now()
+                        }
+                    }
+                }
+            });
+
+            await handlers.onFocusChanged(1);
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+
+        it('should handle WINDOW_ID_NONE', async () => {
+            const mockData = {
+                'youtube.com': {
+                    'ABC123': {
+                        windowId: 1,
+                        tabId: 5,
+                        start: Date.now(),
+                        focus: { 'FOC1': { start: Date.now() } }
+                    }
+                }
+            };
+            chrome.storage.local.get.mockResolvedValue({ raw: mockData });
+
+            await handlers.onFocusChanged(chrome.windows.WINDOW_ID_NONE);
+
+            // Should end all focus globally
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+    });
+
+    describe('onWindowRemoved', () => {
+        it('should end all sessions in removed window', async () => {
+            chrome.storage.local.get.mockResolvedValue({
+                raw: {
+                    'youtube.com': {
+                        'ABC123': {
+                            windowId: 1,
+                            tabId: 5,
+                            start: Date.now()
+                        }
+                    }
+                }
+            });
+
+            await handlers.onWindowRemoved(1);
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+    });
+
+    describe('onSuspend', () => {
+        it('should end all active sessions', async () => {
+            chrome.storage.local.get.mockResolvedValue({
+                raw: {
+                    'youtube.com': {
+                        'ABC123': {
+                            windowId: 1,
+                            tabId: 5,
+                            start: Date.now(),
+                            focus: { 'FOC1': { start: Date.now() } }
+                        }
+                    }
+                }
+            });
+
+            await handlers.onSuspend();
+
+            expect(chrome.storage.local.set).toHaveBeenCalled();
+        });
+    });
+});
