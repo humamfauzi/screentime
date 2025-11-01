@@ -188,6 +188,16 @@ chrome.tabs.onCreated.addListener(async (tab) => {
     const windowId = tab.windowId;
     const tld = Aux.getTLD(tab.url);
     await Storage.insertSession(tld, tabId, windowId);
+    
+    // If this tab is active, also start focus tracking
+    if (tab.active) {
+        const sessionId = await Storage.findActiveSessionId(tld, windowId, tabId);
+        if (sessionId) {
+            // End focus on other tabs in this window first
+            await Storage.endFocusAllExcept(windowId, tabId);
+            await Storage.insertFocus(tld, sessionId);
+        }
+    }
 })
 
 // event when there is change in tab properties
@@ -219,21 +229,37 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     // Start focus on the newly activated tab
     const activeTab = await chrome.tabs.get(activeInfo.tabId);
     const activeTld = Aux.getTLD(activeTab.url);
-    const activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+    
+    // Check if session exists, if not create one
+    let activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+    if (!activeSessionId && Aux.isEligibleUrl(activeTab.url)) {
+        // No session exists, create one first
+        await Storage.insertSession(activeTld, activeTab.id, activeTab.windowId);
+        activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+    }
+    
     if (activeSessionId) {
         await Storage.insertFocus(activeTld, activeSessionId);
     }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-    const tab = await chrome.tabs.get(tabId).catch(() => null);
-    const tld = Aux.getTLD(tab.url);
-    const sessionId = await Storage.findActiveSessionId(tld, removeInfo.windowId, tabId);
-    if (!sessionId) {
-        return;
+    // Tab is already removed, so we need to find it from our storage
+    // We'll iterate through all URLs to find the session with matching windowId and tabId
+    const raw = await Storage.getRaw();
+    
+    for (const url in raw) {
+        const sessions = raw[url];
+        for (const sessionId in sessions) {
+            const session = sessions[sessionId];
+            if (session.windowId === removeInfo.windowId && session.tabId === tabId && !session.end) {
+                // Found the active session for this tab
+                await Storage.endFocus(url, sessionId);
+                await Storage.endURLSession(url, sessionId);
+                return;
+            }
+        }
     }
-    await Storage.endFocus(tld, sessionId);
-    await Storage.endURLSession(tld, sessionId);
 })
 
 // event when we choose another chrome windows
