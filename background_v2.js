@@ -165,13 +165,25 @@ class Storage {
     }
 
     static async endFocusAllExcept(windowId, selectedTabId) {
-        const tabs = await chrome.tabs.query({ windowId: windowId});
-        for (const tab of tabs) {
-            if (tab.id !== selectedTabId) {
-                const tld = Aux.getTLD(tab.url);
-                const sessionId = await this.findActiveSessionId(tld, tab.windowId, tab.id);
-                if (sessionId) {
-                    await this.endFocus(tld, sessionId);
+        // Instead of querying all tabs, we iterate through storage to find active focus sessions
+        // This is more efficient and works even when tabs are being closed
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                // End focus for any session that:
+                // 1. Is in the same window
+                // 2. Is NOT the selected tab
+                // 3. Has an active focus (has focus object with at least one entry without end)
+                if (session.windowId === windowId && session.tabId !== selectedTabId && !session.end) {
+                    if (session.focus) {
+                        const hasFocus = Object.values(session.focus).some(f => !f.end);
+                        if (hasFocus) {
+                            await this.endFocus(url, sessionId);
+                        }
+                    }
                 }
             }
         }
@@ -220,26 +232,39 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // event when a tab is deactivated (loses focus)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    // This fires when a new tab becomes active
-    // We need to end focus on the previously active tab and start focus on the new one
-    
-    // Get all tabs to find the previously active one
-    await Storage.endFocusAllExcept(activeInfo.windowId, activeInfo.tabId);
-    
-    // Start focus on the newly activated tab
-    const activeTab = await chrome.tabs.get(activeInfo.tabId);
-    const activeTld = Aux.getTLD(activeTab.url);
-    
-    // Check if session exists, if not create one
-    let activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
-    if (!activeSessionId && Aux.isEligibleUrl(activeTab.url)) {
-        // No session exists, create one first
-        await Storage.insertSession(activeTld, activeTab.id, activeTab.windowId);
-        activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
-    }
-    
-    if (activeSessionId) {
-        await Storage.insertFocus(activeTld, activeSessionId);
+    try {
+        // This fires when a new tab becomes active
+        // We need to end focus on the previously active tab and start focus on the new one
+        
+        // Get the newly activated tab first to ensure it exists and is valid
+        const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
+        if (!activeTab || !activeTab.url) {
+            return; // Tab doesn't exist or has no URL yet
+        }
+        
+        // End focus on other tabs in this window
+        await Storage.endFocusAllExcept(activeInfo.windowId, activeInfo.tabId);
+        
+        const activeTld = Aux.getTLD(activeTab.url);
+        
+        // Skip if URL is not eligible for tracking
+        if (!Aux.isEligibleUrl(activeTab.url)) {
+            return;
+        }
+        
+        // Check if session exists, if not create one
+        let activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+        if (!activeSessionId) {
+            // No session exists, create one first
+            await Storage.insertSession(activeTld, activeTab.id, activeTab.windowId);
+            activeSessionId = await Storage.findActiveSessionId(activeTld, activeTab.windowId, activeTab.id);
+        }
+        
+        if (activeSessionId) {
+            await Storage.insertFocus(activeTld, activeSessionId);
+        }
+    } catch (error) {
+        console.error('Error in onActivated listener:', error);
     }
 });
 
