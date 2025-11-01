@@ -311,6 +311,35 @@ chrome.runtime.onInstalled.addListener(async () => {
     await Storage.saveRaw({});
 })
 
+// event when browser starts (not just extension install/update)
+chrome.runtime.onStartup.addListener(async () => {
+    try {
+        // Browser is starting, initialize tracking for all existing tabs
+        const windows = await chrome.windows.getAll({ populate: true });
+        
+        for (const window of windows) {
+            for (const tab of window.tabs) {
+                if (!Aux.isEligibleUrl(tab.url)) continue;
+                
+                const tld = Aux.getTLD(tab.url);
+                
+                // Create session for this tab
+                await Storage.insertSession(tld, tab.id, tab.windowId);
+                
+                // If this tab is active and window is focused, start focus tracking
+                if (tab.active && window.focused) {
+                    const sessionId = await Storage.findActiveSessionId(tld, tab.windowId, tab.id);
+                    if (sessionId) {
+                        await Storage.insertFocus(tld, sessionId);
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error in onStartup listener:', error);
+    }
+})
+
 chrome.tabs.onCreated.addListener(async (tab) => {
     const tabId = tab.id;
     const windowId = tab.windowId;
@@ -435,6 +464,96 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
     // Tab is already removed, so we need to find and end it from storage
     await Storage.findAndEndSession(tabId, removeInfo.windowId);
+})
+
+// event when tab is detached from a window (e.g., dragged to become new window or moved)
+chrome.tabs.onDetached.addListener(async (tabId, detachInfo) => {
+    try {
+        // Tab is being moved, end focus (it will restart when attached)
+        // We keep the session alive but end focus during the transition
+        const raw = await Storage.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.tabId === tabId && session.windowId === detachInfo.oldWindowId && !session.end) {
+                    // End focus during detachment
+                    await Storage.endFocus(url, sessionId);
+                    break;
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Error in onDetached listener:', error);
+    }
+})
+
+// event when tab is attached to a window (after being detached)
+chrome.tabs.onAttached.addListener(async (tabId, attachInfo) => {
+    try {
+        // Tab has been attached to a new window, update the windowId in session
+        const raw = await Storage.getRaw();
+        let updated = false;
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.tabId === tabId && !session.end) {
+                    // Update the windowId for this session
+                    session.windowId = attachInfo.newWindowId;
+                    updated = true;
+                    
+                    // Get tab info to check if it's active
+                    const tab = await chrome.tabs.get(tabId).catch(() => null);
+                    if (tab && tab.active) {
+                        // If tab is active in new window, start focus
+                        await Storage.endFocusAllExcept(attachInfo.newWindowId, tabId);
+                        await Storage.insertFocus(url, sessionId);
+                    }
+                    break;
+                }
+            }
+            if (updated) break;
+        }
+        
+        if (updated) {
+            await Storage.saveRaw(raw);
+        }
+    } catch (error) {
+        console.error('Error in onAttached listener:', error);
+    }
+})
+
+// event when tab is replaced (rare, but can happen with prerendering or instant navigation)
+chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+    try {
+        // A tab has been replaced with another tab
+        // Transfer the session from the old tab to the new tab
+        const raw = await Storage.getRaw();
+        let transferred = false;
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.tabId === removedTabId && !session.end) {
+                    // Update the tabId to the new tab
+                    session.tabId = addedTabId;
+                    transferred = true;
+                    break;
+                }
+            }
+            if (transferred) break;
+        }
+        
+        if (transferred) {
+            await Storage.saveRaw(raw);
+        }
+    } catch (error) {
+        console.error('Error in onReplaced listener:', error);
+    }
 })
 
 // event when we choose another chrome windows
