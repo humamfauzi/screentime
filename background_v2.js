@@ -337,28 +337,87 @@ chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
 
 // event when we choose another chrome windows
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
-    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    try {
+        if (windowId === chrome.windows.WINDOW_ID_NONE) {
+            // Browser lost focus (user switched to another application)
+            // End focus on all active sessions across all windows
+            const raw = await Storage.getRaw();
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (!session.end && session.focus) {
+                        const hasFocus = Object.values(session.focus).some(f => !f.end);
+                        if (hasFocus) {
+                            await Storage.endFocus(url, sessionId);
+                        }
+                    }
+                }
+            }
+            return;
+        }
         
-    // Get all tabs in the focused window
-    const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
-    if (tabs.length === 0) return;
+        // Browser gained focus on a specific window
+        // End focus on tabs in other windows, start focus on active tab in this window
+        const raw = await Storage.getRaw();
         
-    const activeTab = tabs[0];
-    const tld = Aux.getTLD(activeTab.url);
-    await Storage.insertFocus(tld);
+        // End focus on all tabs NOT in this window
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId !== windowId && !session.end && session.focus) {
+                    const hasFocus = Object.values(session.focus).some(f => !f.end);
+                    if (hasFocus) {
+                        await Storage.endFocus(url, sessionId);
+                    }
+                }
+            }
+        }
+        
+        // Get the active tab in the focused window
+        const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
+        if (tabs.length === 0) return;
+        
+        const activeTab = tabs[0];
+        if (!Aux.isEligibleUrl(activeTab.url)) return;
+        
+        const tld = Aux.getTLD(activeTab.url);
+        
+        // Ensure session exists
+        let sessionId = await Storage.findActiveSessionId(tld, activeTab.windowId, activeTab.id);
+        if (!sessionId) {
+            await Storage.insertSession(tld, activeTab.id, activeTab.windowId);
+            sessionId = await Storage.findActiveSessionId(tld, activeTab.windowId, activeTab.id);
+        }
+        
+        if (sessionId) {
+            await Storage.insertFocus(tld, sessionId);
+        }
+    } catch (error) {
+        console.error('Error in onFocusChanged listener:', error);
+    }
 })
 
 chrome.windows.onRemoved.addListener(async (windowId) => {
-    const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
-    if (tabs.length === 0) return;
-
-    for (const tab of tabs) {
-        const tld = Aux.getTLD(tab.url);
-        const sessionId = await Storage.findActiveSessionId(tld, tab.windowId, tab.id);
-        if (sessionId) {
-            await Storage.endFocus(tld, sessionId);
-            await Storage.endURLSession(tld, sessionId);
+    try {
+        // Window is already removed, so we can't query its tabs
+        // Instead, search through storage for all sessions in this window
+        const raw = await Storage.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                // End all active sessions (not yet ended) in the removed window
+                if (session.windowId === windowId && !session.end) {
+                    await Storage.endFocus(url, sessionId);
+                    await Storage.endURLSession(url, sessionId);
+                }
+            }
         }
+    } catch (error) {
+        console.error('Error in onRemoved listener:', error);
     }
 })
 
