@@ -115,11 +115,14 @@ class Storage {
         if (!Aux.isEligibleUrl(url)) return;
         const focusId = generateId();
         const raw = await this.getRaw();
-        if (!raw[url] || raw[url].length === 0) {
+        if (!raw[url] || Object.keys(raw[url]).length === 0) {
             return; // should not happen but handled as not recorded
         }
         const sessions = raw[url];
         const selected = sessions[sessionId];
+        if (!selected) {
+            return; // session doesn't exist
+        }
         if (!selected.focus) {
             selected.focus = {};
         }
@@ -134,13 +137,13 @@ class Storage {
             return;
         }
         const raw = await this.getRaw();
-        if (!raw[url] || raw[url].length === 0) {
+        if (!raw[url] || Object.keys(raw[url]).length === 0) {
             return; // should not happen but handled as not recorded
         }
         const sessions = raw[url];
         const currentSession = sessions[sessionId];
-        if (currentSession.end) {
-            return; // already ended
+        if (!currentSession || currentSession.end) {
+            return; // session doesn't exist or already ended
         }
         currentSession.end = Date.now();
         currentSession.total = currentSession.end - currentSession.start;
@@ -152,13 +155,20 @@ class Storage {
             return;
         }
         const raw = await this.getRaw();
-        if (!raw[url] || raw[url].length === 0) {
+        if (!raw[url] || Object.keys(raw[url]).length === 0) {
             return; // should not happen but handled as not recorded
         }
         const sessions = raw[url];
-        const currentSession = sessions[sessionId]; // always pick the latest session
+        const currentSession = sessions[sessionId];
+        if (!currentSession) {
+            return; // session doesn't exist
+        }
         // find the one that does not have end. if all goes well, it should be one
         const currentFocus = Object.values(currentSession.focus || {}).find(focus => !focus.end);
+        if (!currentFocus) {
+            return; // no active focus to end
+        }
+        const now = Date.now();
         currentFocus.end = now;
         currentFocus.total = currentFocus.end - currentFocus.start;
         await this.saveRaw(raw);
@@ -183,6 +193,112 @@ class Storage {
                         if (hasFocus) {
                             await this.endFocus(url, sessionId);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper method: Find and end session by tabId and windowId
+    static async findAndEndSession(tabId, windowId) {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === windowId && session.tabId === tabId && !session.end) {
+                    await this.endFocus(url, sessionId);
+                    await this.endURLSession(url, sessionId);
+                    return true; // Found and ended
+                }
+            }
+        }
+        return false; // Not found
+    }
+
+    // Helper method: End all focus in a specific window (except one tab)
+    static async endAllFocusInWindow(windowId, exceptTabId = null) {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === windowId && session.tabId !== exceptTabId && !session.end) {
+                    if (session.focus) {
+                        const hasFocus = Object.values(session.focus).some(f => !f.end);
+                        if (hasFocus) {
+                            await this.endFocus(url, sessionId);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper method: End all focus globally (across all windows)
+    static async endAllFocusGlobally() {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (!session.end && session.focus) {
+                    const hasFocus = Object.values(session.focus).some(f => !f.end);
+                    if (hasFocus) {
+                        await this.endFocus(url, sessionId);
+                    }
+                }
+            }
+        }
+    }
+
+    // Helper method: End all active sessions in a specific window
+    static async endAllSessionsInWindow(windowId) {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === windowId && !session.end) {
+                    await this.endFocus(url, sessionId);
+                    await this.endURLSession(url, sessionId);
+                }
+            }
+        }
+    }
+
+    // Helper method: End all active sessions globally
+    static async endAllActiveSessions() {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (!session.end) {
+                    await this.endFocus(url, sessionId);
+                    await this.endURLSession(url, sessionId);
+                }
+            }
+        }
+    }
+
+    // Helper method: End focus in all windows except one
+    static async endFocusInOtherWindows(windowId) {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId !== windowId && !session.end && session.focus) {
+                    const hasFocus = Object.values(session.focus).some(f => !f.end);
+                    if (hasFocus) {
+                        await this.endFocus(url, sessionId);
                     }
                 }
             }
@@ -317,22 +433,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-    // Tab is already removed, so we need to find it from our storage
-    // We'll iterate through all URLs to find the session with matching windowId and tabId
-    const raw = await Storage.getRaw();
-    
-    for (const url in raw) {
-        const sessions = raw[url];
-        for (const sessionId in sessions) {
-            const session = sessions[sessionId];
-            if (session.windowId === removeInfo.windowId && session.tabId === tabId && !session.end) {
-                // Found the active session for this tab
-                await Storage.endFocus(url, sessionId);
-                await Storage.endURLSession(url, sessionId);
-                return;
-            }
-        }
-    }
+    // Tab is already removed, so we need to find and end it from storage
+    await Storage.findAndEndSession(tabId, removeInfo.windowId);
 })
 
 // event when we choose another chrome windows
@@ -340,40 +442,13 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     try {
         if (windowId === chrome.windows.WINDOW_ID_NONE) {
             // Browser lost focus (user switched to another application)
-            // End focus on all active sessions across all windows
-            const raw = await Storage.getRaw();
-            for (const url in raw) {
-                const sessions = raw[url];
-                for (const sessionId in sessions) {
-                    const session = sessions[sessionId];
-                    if (!session.end && session.focus) {
-                        const hasFocus = Object.values(session.focus).some(f => !f.end);
-                        if (hasFocus) {
-                            await Storage.endFocus(url, sessionId);
-                        }
-                    }
-                }
-            }
+            await Storage.endAllFocusGlobally();
             return;
         }
         
         // Browser gained focus on a specific window
-        // End focus on tabs in other windows, start focus on active tab in this window
-        const raw = await Storage.getRaw();
-        
-        // End focus on all tabs NOT in this window
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId !== windowId && !session.end && session.focus) {
-                    const hasFocus = Object.values(session.focus).some(f => !f.end);
-                    if (hasFocus) {
-                        await Storage.endFocus(url, sessionId);
-                    }
-                }
-            }
-        }
+        // End focus on tabs in other windows
+        await Storage.endFocusInOtherWindows(windowId);
         
         // Get the active tab in the focused window
         const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
@@ -401,21 +476,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 
 chrome.windows.onRemoved.addListener(async (windowId) => {
     try {
-        // Window is already removed, so we can't query its tabs
-        // Instead, search through storage for all sessions in this window
-        const raw = await Storage.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                // End all active sessions (not yet ended) in the removed window
-                if (session.windowId === windowId && !session.end) {
-                    await Storage.endFocus(url, sessionId);
-                    await Storage.endURLSession(url, sessionId);
-                }
-            }
-        }
+        // Window is already removed, end all sessions in this window
+        await Storage.endAllSessionsInWindow(windowId);
     } catch (error) {
         console.error('Error in onRemoved listener:', error);
     }
@@ -423,16 +485,6 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 
 // event when extension is being suspended; should be consider to end all on going records
 chrome.runtime.onSuspend.addListener(async () => {
-    const windows = await chrome.windows.getAll();
-    for (const window of windows) {
-        const tabs = await chrome.tabs.query({ windowId: window.id });
-        for (const tab of tabs) {
-            const tld = Aux.getTLD(tab.url);
-            const sessionId = await Storage.findActiveSessionId(tld, tab.windowId, tab.id);
-            if (sessionId) {
-                await Storage.endFocus(tld, sessionId);
-                await Storage.endURLSession(tld, sessionId);
-            }
-        }
-    }
+    // End all active sessions across all windows
+    await Storage.endAllActiveSessions();
 })
