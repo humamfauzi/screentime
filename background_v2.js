@@ -214,20 +214,68 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 
 // event when there is change in tab properties
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // it should end the previous session and start a new session if the TLD is changed
-    const tld = Aux.getTLD(tab.url);
-    const previousTld = Aux.getTLD(changeInfo.url || '');
-    const isUpdateTLD = changeInfo.url && previousTld === tld;
-    if (!isUpdateTLD) {
-        return;
+    try {
+        // Only process when URL actually changes
+        if (!changeInfo.url) {
+            return;
+        }
+        
+        const newUrl = changeInfo.url;
+        const newTld = Aux.getTLD(newUrl);
+        const newUrlEligible = Aux.isEligibleUrl(newUrl);
+        
+        // Find if there's an existing active session for this tab
+        // We need to search through all URLs since we don't know the previous URL
+        const raw = await Storage.getRaw();
+        let previousTld = null;
+        let previousSessionId = null;
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === tab.windowId && session.tabId === tabId && !session.end) {
+                    previousTld = url;
+                    previousSessionId = sessionId;
+                    break;
+                }
+            }
+            if (previousSessionId) break;
+        }
+        
+        // Determine what to do based on previous and new states
+        const hasPreviousSession = previousSessionId !== null;
+        const domainChanged = previousTld !== newTld;
+        
+        if (hasPreviousSession && (domainChanged || !newUrlEligible)) {
+            // End the previous session when:
+            // 1. Domain changed (youtube.com -> twitter.com)
+            // 2. Or navigating to ineligible URL (youtube.com -> chrome://settings)
+            await Storage.endFocus(previousTld, previousSessionId);
+            await Storage.endURLSession(previousTld, previousSessionId);
+        }
+        
+        if (newUrlEligible) {
+            if (!hasPreviousSession || domainChanged) {
+                // Create new session when:
+                // 1. No previous session exists (ineligible -> eligible)
+                // 2. Or domain changed (youtube.com -> twitter.com)
+                await Storage.insertSession(newTld, tabId, tab.windowId);
+                
+                // If this tab is currently active, also start focus
+                if (tab.active) {
+                    const newSessionId = await Storage.findActiveSessionId(newTld, tab.windowId, tabId);
+                    if (newSessionId) {
+                        await Storage.insertFocus(newTld, newSessionId);
+                    }
+                }
+            }
+            // If same domain (youtube.com/video1 -> youtube.com/video2), do nothing
+            // The session continues tracking the same domain
+        }
+    } catch (error) {
+        console.error('Error in onUpdated listener:', error);
     }
-    const previousSessionId = await Storage.findSessionId(previousTld, tab.windowId, tabId);
-    if (previousSessionId) {
-        // try to end focus. If the tab not focused, it will be no-op
-        await Storage.endFocus(previousTld, previousSessionId);
-        await Storage.endURLSession(previousTld, previousSessionId);
-    }
-    await Storage.insertSession(tld, tabId, tab.windowId);
 })
 
 // event when a tab is deactivated (loses focus)
