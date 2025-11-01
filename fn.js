@@ -1,4 +1,3 @@
-
 const _ = {
     "raw": {
         "youtube.com": {
@@ -306,12 +305,6 @@ class Storage {
     }
 }
 
-// Export classes for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
-    // Node.js environment
     module.exports = { Aux, Storage };
-} else if (typeof window !== 'undefined') {
-    // Browser environment
-    window.Aux = Aux;
-    window.Storage = Storage;
 }

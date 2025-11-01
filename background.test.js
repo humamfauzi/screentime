@@ -770,7 +770,11 @@ describe('Background Event Handlers', () => {
 
         // Load the background script to register handlers
         jest.isolateModules(() => {
-            require('./background_v2.js');
+            // Inject a variable before requiring background.js
+            const { Aux, Storage } = require('./fn.js');
+            global.Aux = Aux;
+            global.Storage = Storage;
+            require('./background.js');
         });
     });
 

@@ -1,7 +1,7 @@
-// Import modules using conditional require for compatibility with both browser and Node.js
-const { Aux, Storage } = typeof module !== 'undefined' && module.exports 
-    ? require('./fn.js') 
-    : window;
+
+if (typeof importScripts !== 'undefined') {
+    importScripts('fn.js');
+}
 
 // event when extension is installed or initiated
 chrome.runtime.onInstalled.addListener(async () => {
@@ -11,7 +11,6 @@ chrome.runtime.onInstalled.addListener(async () => {
 // event when browser starts (not just extension install/update)
 chrome.runtime.onStartup.addListener(async () => {
     try {
-        console.log("HELLO START")
         // Browser is starting, initialize tracking for all existing tabs
         const windows = await chrome.windows.getAll({ populate: true });
         
