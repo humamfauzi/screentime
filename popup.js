@@ -49,10 +49,10 @@ async function loadHomePage() {
   const totalFocusByURL = await Storage.getFocusSumByURL(startDayUnix, endDayUnix);
 
   // Load today's activity
-  displayTodayActivity(totalFocus, totalFocusByURL);
+  await displayTodayActivity(totalFocus, totalFocusByURL);
 }
 
-function displayTodayActivity(totalFocus, totalFocusByURL) {
+async function displayTodayActivity(totalFocus, totalFocusByURL) {
   const activityItems = document.getElementById('activity-items');
   const totalTimeElement = document.getElementById('total-time');
   const sitesCountElement = document.getElementById('sites-count');
@@ -79,17 +79,39 @@ function displayTodayActivity(totalFocus, totalFocusByURL) {
   const zip = Object.entries(totalFocusByURL).map(([domain, ms]) => [domain, ms / 1000]);
   const sorted = zip.sort((a, b) => b[1] - a[1]);
 
-  // Create activity items
-  activityItems.innerHTML = sorted.map(([domain, timeSpent]) => {
-    return `
-      <div class="activity-item">
-        <div class="activity-header">
-          <div class="activity-domain">${domain}</div>
-          <div class="activity-time">${formatTime(timeSpent)}</div>
-        </div>
-      </div>
+  // Clear activity items
+  activityItems.innerHTML = '';
+
+  // Create activity items with block hour diagrams
+  for (const [domain, timeSpent] of sorted) {
+    const activityItem = document.createElement('div');
+    activityItem.className = 'activity-item';
+    
+    // Create header with domain and time
+    const activityHeader = document.createElement('div');
+    activityHeader.className = 'activity-header';
+    activityHeader.innerHTML = `
+      <div class="activity-domain">${domain}</div>
+      <div class="activity-time">${formatTime(timeSpent)}</div>
     `;
-  }).join('');
+    
+    activityItem.appendChild(activityHeader);
+    
+    // Generate and add block hour diagram
+    const hourData = await Storage.generateBlockHourData(domain);
+    const blockDiagram = BlockHourDiagram.create(hourData, {
+      height: '40px',
+      baseColor: '#4A90E2',
+      textColor: '#fff',
+      borderColor: '#e0e0e0'
+    });
+    
+    // Add some spacing
+    blockDiagram.style.marginTop = '8px';
+    activityItem.appendChild(blockDiagram);
+    
+    activityItems.appendChild(activityItem);
+  }
 }
 
 function formatTime(seconds) {
