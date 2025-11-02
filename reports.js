@@ -1,5 +1,16 @@
 // Reports.js - Reports page functionality
 
+class Read {
+  static async readRaw() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(['raw'], (result) => {
+        resolve(result.raw || {});
+      });
+    });
+  }
+
+}
+
 function loadReportsPage() {
   const reportPeriod = document.getElementById('report-period');
   
@@ -16,6 +27,10 @@ function loadReportsPage() {
 function loadReportData() {
   const periodSelect = document.getElementById('report-period');
   const days = parseInt(periodSelect.value);
+  Read.readRaw().then((raw) => {
+    console.log("test", raw)
+  })
+  return;
 
   chrome.storage.local.get(['activity'], (result) => {
     const activity = result.activity || {};

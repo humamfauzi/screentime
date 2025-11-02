@@ -1,17 +1,17 @@
 // Popup.js - Home page functionality
 
-document.addEventListener('DOMContentLoaded', () => {
-  initNavigation();
-  loadHomePage();
+document.addEventListener('DOMContentLoaded', async () => {
+  await initNavigation();
+  await loadHomePage();
 });
 
 // Navigation between pages
-function initNavigation() {
+async function initNavigation() {
   const navItems = document.querySelectorAll('.nav-item');
   const pages = document.querySelectorAll('.page');
 
-  navItems.forEach(item => {
-    item.addEventListener('click', () => {
+  navItems.forEach(async item => {
+    item.addEventListener('click', async () => {
       const pageName = item.dataset.page;
 
       // Update active nav item
@@ -24,7 +24,7 @@ function initNavigation() {
 
       // Load page-specific data
       if (pageName === 'home') {
-        loadHomePage();
+        await loadHomePage();
       } else if (pageName === 'settings') {
         loadSettingsPage();
       } else if (pageName === 'reports') {
@@ -35,7 +35,7 @@ function initNavigation() {
 }
 
 // Load home page data
-function loadHomePage() {
+async function loadHomePage() {
   const today = getTodayString();
   
   // Display current date
@@ -43,23 +43,21 @@ function loadHomePage() {
   const dateObj = new Date();
   const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
   dateElement.textContent = dateObj.toLocaleDateString('en-US', options);
+  const startDayUnix = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()).getTime();
+  const endDayUnix = startDayUnix + 86400000 - 1; // End of the day
+  const totalFocus = await Storage.getFocusSum(startDayUnix, endDayUnix);
+  const totalFocusByURL = await Storage.getFocusSumByURL(startDayUnix, endDayUnix);
 
   // Load today's activity
-  chrome.storage.local.get(['activity', 'settings'], (result) => {
-    const activity = result.activity || {};
-    const settings = result.settings || { limits: {} };
-    const todayActivity = activity[today] || {};
-
-    displayTodayActivity(todayActivity, settings.limits);
-  });
+  displayTodayActivity(totalFocus, totalFocusByURL);
 }
 
-function displayTodayActivity(todayActivity, limits) {
+function displayTodayActivity(totalFocus, totalFocusByURL) {
   const activityItems = document.getElementById('activity-items');
   const totalTimeElement = document.getElementById('total-time');
   const sitesCountElement = document.getElementById('sites-count');
 
-  const domains = Object.keys(todayActivity);
+  const domains = Object.keys(totalFocusByURL);
   
   if (domains.length === 0) {
     activityItems.innerHTML = `
@@ -74,36 +72,21 @@ function displayTodayActivity(todayActivity, limits) {
   }
 
   // Calculate total time
-  const totalSeconds = domains.reduce((sum, domain) => sum + todayActivity[domain], 0);
-  totalTimeElement.textContent = formatTime(totalSeconds);
+  const seconds = totalFocus / 1000
+  totalTimeElement.textContent = formatTime(seconds);
   sitesCountElement.textContent = domains.length;
 
-  // Sort domains by time spent (descending)
-  const sortedDomains = domains.sort((a, b) => todayActivity[b] - todayActivity[a]);
+  const zip = Object.entries(totalFocusByURL).map(([domain, ms]) => [domain, ms / 1000]);
+  const sorted = zip.sort((a, b) => b[1] - a[1]);
 
   // Create activity items
-  activityItems.innerHTML = sortedDomains.map(domain => {
-    const timeSpent = todayActivity[domain];
-    const limit = limits[domain] ? limits[domain].limit : null;
-    const percentage = limit ? Math.min((timeSpent / limit) * 100, 100) : 0;
-    
+  activityItems.innerHTML = sorted.map(([domain, timeSpent]) => {
     return `
       <div class="activity-item">
         <div class="activity-header">
           <div class="activity-domain">${domain}</div>
           <div class="activity-time">${formatTime(timeSpent)}</div>
         </div>
-        ${limit ? `
-          <div class="activity-progress">
-            <div class="progress-bar">
-              <div class="progress-fill ${percentage >= 100 ? 'exceeded' : ''}" style="width: ${percentage}%"></div>
-            </div>
-            <div class="progress-label">
-              ${formatTime(timeSpent)} / ${formatTime(limit)}
-              ${percentage >= 100 ? '<span class="limit-exceeded">Limit Exceeded</span>' : ''}
-            </div>
-          </div>
-        ` : ''}
       </div>
     `;
   }).join('');
