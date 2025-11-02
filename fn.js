@@ -69,7 +69,7 @@ class Aux {
 
     static currentStartAndEndWeek(time) {
         const dayOfWeek = time.getDay(); // 0 (Sun) to 6 (Sat)
-        const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
+        const startOfWeek = new Date(time.getFullYear(), time.getMonth(), time.getDate() - dayOfWeek).getTime();
         const endOfWeek = startOfWeek + 7 * 86400000 - 1; // End of the week
         return [startOfWeek, endOfWeek];
     }

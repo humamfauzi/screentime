@@ -11,6 +11,19 @@ class Read {
 
 }
 
+function getPeriodBoundaries(days) {
+  const endDate = new Date();
+  endDate.setHours(23, 59, 59, 999); // End of today
+  const endTimestamp = endDate.getTime();
+  
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - days + 1);
+  startDate.setHours(0, 0, 0, 0); // Start of the first day
+  const startTimestamp = startDate.getTime();
+  
+  return [startTimestamp, endTimestamp];
+}
+
 function loadReportsPage() {
   const reportPeriod = document.getElementById('report-period');
   
@@ -24,85 +37,45 @@ function loadReportsPage() {
   loadReportData();
 }
 
-function loadReportData() {
+async function loadReportData() {
   const periodSelect = document.getElementById('report-period');
   const days = parseInt(periodSelect.value);
-  displayReportSummary();
-  displayTopWebsites();
-  displayDailyBreakdown();
+  const [startTimestamp, endTimestamp] = getPeriodBoundaries(days);
+  
+  await displayReportSummary(startTimestamp, endTimestamp, days);
+  await displayTopWebsites(startTimestamp, endTimestamp);
+  await displayDailyBreakdown(startTimestamp, endTimestamp);
 }
 
-function getReportData(activity, days) {
-  const endDate = new Date();
-  const startDate = new Date();
-  startDate.setDate(startDate.getDate() - days + 1);
-
-  const reportData = {
-    dailyData: [],
-    websiteTotals: {},
-    totalTime: 0,
-    daysWithActivity: 0
-  };
-
-  // Iterate through each day in the period
-  for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-    const dateString = d.toISOString().split('T')[0];
-    const dayActivity = activity[dateString] || {};
-    
-    const dayTotal = Object.values(dayActivity).reduce((sum, time) => sum + time, 0);
-    
-    if (dayTotal > 0) {
-      reportData.daysWithActivity++;
-    }
-
-    reportData.dailyData.push({
-      date: dateString,
-      activity: dayActivity,
-      total: dayTotal
-    });
-
-    // Aggregate website totals
-    for (const [domain, time] of Object.entries(dayActivity)) {
-      if (!reportData.websiteTotals[domain]) {
-        reportData.websiteTotals[domain] = 0;
-      }
-      reportData.websiteTotals[domain] += time;
-      reportData.totalTime += time;
-    }
-  }
-
-  return reportData;
-}
-
-function displayReportSummary(reportData) {
+async function displayReportSummary(startTimestamp, endTimestamp, days) {
   const avgDailyTimeEl = document.getElementById('avg-daily-time');
   const mostVisitedEl = document.getElementById('most-visited');
   const totalSitesEl = document.getElementById('total-sites');
 
   // Average daily time
-  const avgTime = reportData.daysWithActivity > 0 
-    ? Math.floor(reportData.totalTime / reportData.daysWithActivity)
-    : 0;
+  const totalFocusTime = await Storage.getFocusSum(startTimestamp, endTimestamp);
+  const avgTime = days > 0 ? totalFocusTime / days : 0;
   avgDailyTimeEl.textContent = formatTime(avgTime);
 
   // Most visited site
-  const sortedSites = Object.entries(reportData.websiteTotals)
-    .sort((a, b) => b[1] - a[1]);
-  
-  if (sortedSites.length > 0) {
-    mostVisitedEl.textContent = sortedSites[0][0];
+  const mostVisited = await Storage.getMostVisitedURLs(startTimestamp, endTimestamp, 1);
+  if (mostVisited.length > 0) {
+    mostVisitedEl.textContent = mostVisited[0].url;
   } else {
     mostVisitedEl.textContent = '—';
   }
 
   // Total sites
-  totalSitesEl.textContent = Object.keys(reportData.websiteTotals).length;
+  const totalSites = await Storage.totalSitesVisited(startTimestamp, endTimestamp);
+  totalSitesEl.textContent = totalSites;
 }
 
-function displayTopWebsites(reportData) {
+async function displayTopWebsites(startTimestamp, endTimestamp) {
   const topWebsitesEl = document.getElementById('top-websites');
   
-  const sortedSites = Object.entries(reportData.websiteTotals)
+  // Get focus time by URL and sort by focus time
+  const focusByURL = await Storage.getFocusSumByURL(startTimestamp, endTimestamp);
+  const sortedSites = Object.entries(focusByURL)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10); // Top 10
 
@@ -137,13 +110,14 @@ function displayTopWebsites(reportData) {
   }).join('');
 }
 
-function displayDailyBreakdown(reportData) {
+async function displayDailyBreakdown(startTimestamp, endTimestamp) {
   const dailyBreakdownEl = document.getElementById('daily-breakdown');
   
-  // Reverse to show most recent first
-  const reversedData = [...reportData.dailyData].reverse();
-
-  if (reportData.totalTime === 0) {
+  // Get the most focused website for the period
+  const focusByURL = await Storage.getFocusSumByURL(startTimestamp, endTimestamp);
+  const sortedSites = Object.entries(focusByURL).sort((a, b) => b[1] - a[1]);
+  
+  if (sortedSites.length === 0) {
     dailyBreakdownEl.innerHTML = `
       <div class="empty-state">
         <p>No data available for the selected period</p>
@@ -152,46 +126,38 @@ function displayDailyBreakdown(reportData) {
     return;
   }
 
-  dailyBreakdownEl.innerHTML = reversedData.map(day => {
-    if (day.total === 0) {
-      return ''; // Skip days with no activity
-    }
-
-    const date = new Date(day.date);
-    const dateOptions = { weekday: 'short', month: 'short', day: 'numeric' };
-    const formattedDate = date.toLocaleDateString('en-US', dateOptions);
-
-    const topSites = Object.entries(day.activity)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3);
-
-    return `
-      <div class="daily-item">
-        <div class="daily-header">
-          <span class="daily-date">${formattedDate}</span>
-          <span class="daily-total">${formatTime(day.total)}</span>
-        </div>
-        <div class="daily-sites">
-          ${topSites.map(([domain, time]) => `
-            <div class="daily-site">
-              <span class="daily-site-name">${domain}</span>
-              <span class="daily-site-time">${formatTime(time)}</span>
-            </div>
-          `).join('')}
-          ${Object.keys(day.activity).length > 3 ? `
-            <div class="daily-site-more">
-              +${Object.keys(day.activity).length - 3} more
-            </div>
-          ` : ''}
-        </div>
-      </div>
-    `;
-  }).filter(html => html !== '').join('');
+  const topUrl = sortedSites[0][0];
+  const topFocusTime = sortedSites[0][1];
+  
+  // Generate block day diagram data for the most focused website
+  const weekData = await Storage.generateBlockDayData(topUrl);
+  
+  // Create the block day diagram
+  const diagram = BlockDayDiagram.create(weekData, {
+    width: '100%',
+    blockHeight: '50px',
+    baseColor: '#4A90E2'
+  });
+  
+  // Build the HTML
+  dailyBreakdownEl.innerHTML = `
+    <div class="breakdown-header">
+      <h4>Weekly Pattern: ${topUrl}</h4>
+      <p class="breakdown-subtitle">Total focus time: ${formatTime(topFocusTime)}</p>
+    </div>
+    <div id="block-diagram-container"></div>
+  `;
+  
+  // Append the diagram
+  const diagramContainer = dailyBreakdownEl.querySelector('#block-diagram-container');
+  diagramContainer.appendChild(diagram);
 }
 
-function formatTime(seconds) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
+function formatTime(milliseconds) {
+  // Convert milliseconds to seconds
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
   
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
