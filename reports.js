@@ -27,19 +27,9 @@ function loadReportsPage() {
 function loadReportData() {
   const periodSelect = document.getElementById('report-period');
   const days = parseInt(periodSelect.value);
-  Read.readRaw().then((raw) => {
-    console.log("test", raw)
-  })
-  return;
-
-  chrome.storage.local.get(['activity'], (result) => {
-    const activity = result.activity || {};
-    
-    const reportData = getReportData(activity, days);
-    displayReportSummary(reportData);
-    displayTopWebsites(reportData);
-    displayDailyBreakdown(reportData);
-  });
+  displayReportSummary();
+  displayTopWebsites();
+  displayDailyBreakdown();
 }
 
 function getReportData(activity, days) {

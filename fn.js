@@ -60,6 +60,19 @@ class Aux {
         }
         return true;
     }
+
+    static currentStartAndEnd(time) {
+        const startOfDay = new Date(time.getFullYear(), time.getMonth(), time.getDate()).getTime();
+        const endOfDay = startOfDay + 86400000 - 1; // End of the day
+        return [startOfDay, endOfDay];
+    }
+
+    static currentStartAndEndWeek(time) {
+        const dayOfWeek = time.getDay(); // 0 (Sun) to 6 (Sat)
+        const startOfWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek).getTime();
+        const endOfWeek = startOfWeek + 7 * 86400000 - 1; // End of the week
+        return [startOfWeek, endOfWeek];
+    }
 }
 
 class Storage {
@@ -451,6 +464,36 @@ class Storage {
         }
         return hourData;
     }
+
+    static async generateBlockDayData(url) {
+        // Set startDay to the start of this week (Sunday), endDay to the start of next week
+        const [start, end] = Aux.currentStartAndEndWeek(new Date())
+        const raw = await this.getRaw();
+        const weekData = [];
+        for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+            const dayStart = start + dayOffset * 86400000;
+            const dayEnd = dayStart + 86400000 - 1;
+            let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: 0 }));
+            if (raw[url]) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (session.focus) {
+                        for (const focusId in session.focus) {
+                            const focus = session.focus[focusId];
+                            if (focus.total && focus.start >= dayStart && focus.start <= dayEnd) {
+                                const focusStart = new Date(focus.start);
+                                const hour = focusStart.getHours();
+                                hourData[hour].strength += focus.total / 3600000; // convert to hours for strength
+                            }
+                        }
+                    }
+                }
+            }
+            weekData.push(hourData);
+        }
+        return weekData;
+    }
 }
 
 class BlockHourDiagram {
@@ -602,10 +645,277 @@ class BlockHourDiagram {
     }
 }
 
-class BlockDayDiagram {}
+class BlockDayDiagram {
+    /**
+     * Creates a 7-day x 24-hour block diagram representing a week
+     * @param {Array} data - Array of 7 arrays, each containing 24 objects with {strength: number, number: number}
+     *                       strength: 0-1 value for opacity (0 = transparent, 1 = opaque)
+     *                       number: value to display in the block
+     * @param {Object} options - Configuration options
+     * @returns {HTMLElement} - Container element with the diagram
+     */
+    static create(data, options = {}) {
+        if (!Array.isArray(data) || data.length !== 7) {
+            throw new Error('Data must be an array of 7 arrays (one for each day)');
+        }
+
+        for (let i = 0; i < 7; i++) {
+            if (!Array.isArray(data[i]) || data[i].length !== 24) {
+                throw new Error(`Day ${i} must have 24 hours of data`);
+            }
+        }
+
+        const defaults = {
+            width: '100%',
+            height: 'auto',
+            baseColor: '#4A90E2',
+            textColor: '#333',
+            borderColor: '#ddd',
+            quarterMarkColor: '#999',
+            quarterMarkWidth: '2px',
+            blockHeight: '40px',
+            dayLabelWidth: '30px',
+            dayLabelColor: '#666',
+            dayLabelFontSize: '12px'
+        };
+
+        const config = { ...defaults, ...options };
+
+        // Day labels
+        const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+        // Create main container
+        const mainContainer = document.createElement('div');
+        mainContainer.className = 'block-day-diagram';
+        mainContainer.style.cssText = `
+            display: flex;
+            flex-direction: column;
+            width: ${config.width};
+            border: 1px solid ${config.borderColor};
+            border-radius: 4px;
+            overflow: hidden;
+        `;
+
+        // Create header with hour markers
+        const header = document.createElement('div');
+        header.className = 'block-day-header';
+        header.style.cssText = `
+            display: flex;
+            height: 25px;
+            border-bottom: 1px solid ${config.borderColor};
+            background-color: #f8f8f8;
+        `;
+
+        // Empty corner for day label column
+        const cornerCell = document.createElement('div');
+        cornerCell.style.cssText = `
+            width: ${config.dayLabelWidth};
+            flex-shrink: 0;
+            border-right: 1px solid ${config.borderColor};
+        `;
+        header.appendChild(cornerCell);
+
+        // Hour markers container
+        const hourMarkersContainer = document.createElement('div');
+        hourMarkersContainer.style.cssText = `
+            flex: 1;
+            display: flex;
+            position: relative;
+        `;
+
+        // Add quarter markers (6, 12, 18) in the header
+        for (let h = 0; h < 24; h++) {
+            const hourMarker = document.createElement('div');
+            hourMarker.style.cssText = `
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 10px;
+                color: ${config.dayLabelColor};
+                position: relative;
+                ${(h === 6 || h === 12 || h === 18) ? `border-right: ${config.quarterMarkWidth} solid ${config.quarterMarkColor};` : ''}
+            `;
+            
+            // Show numbers at quarters
+            if (h === 6 || h === 12 || h === 18) {
+                hourMarker.textContent = h;
+                hourMarker.style.fontWeight = 'bold';
+            }
+            
+            hourMarkersContainer.appendChild(hourMarker);
+        }
+
+        header.appendChild(hourMarkersContainer);
+        mainContainer.appendChild(header);
+
+        // Create 7 rows (one for each day)
+        for (let day = 0; day < 7; day++) {
+            const row = document.createElement('div');
+            row.className = 'block-day-row';
+            row.style.cssText = `
+                display: flex;
+                border-bottom: 1px solid ${config.borderColor};
+            `;
+
+            // Day label
+            const dayLabel = document.createElement('div');
+            dayLabel.className = 'day-label';
+            dayLabel.textContent = dayLabels[day];
+            dayLabel.style.cssText = `
+                width: ${config.dayLabelWidth};
+                flex-shrink: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-weight: bold;
+                font-size: ${config.dayLabelFontSize};
+                color: ${config.dayLabelColor};
+                background-color: #f8f8f8;
+                border-right: 1px solid ${config.borderColor};
+            `;
+            row.appendChild(dayLabel);
+
+            // Blocks container for this day
+            const blocksContainer = document.createElement('div');
+            blocksContainer.className = 'day-blocks-container';
+            blocksContainer.style.cssText = `
+                flex: 1;
+                display: flex;
+                height: ${config.blockHeight};
+            `;
+
+            // Create 24 blocks for each hour
+            for (let hour = 0; hour < 24; hour++) {
+                const blockData = data[day][hour] || { strength: 0, number: 0 };
+                const strength = Math.max(0, Math.min(1, blockData.strength || 0));
+                const displayNumber = blockData.number !== undefined ? blockData.number : '';
+
+                const block = document.createElement('div');
+                block.className = 'hour-block';
+                block.dataset.day = day;
+                block.dataset.hour = hour;
+                
+                // Add quarter-day markers (after hours 6, 12, 18)
+                const hasMarker = hour === 6 || hour === 12 || hour === 18;
+                
+                block.style.cssText = `
+                    flex: 1;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    background-color: ${this._hexToRgba(config.baseColor, strength)};
+                    color: ${config.textColor};
+                    font-size: 10px;
+                    font-weight: 500;
+                    transition: all 0.2s;
+                    cursor: pointer;
+                    position: relative;
+                    ${hasMarker ? `border-right: ${config.quarterMarkWidth} solid ${config.quarterMarkColor};` : 'border-right: 1px solid rgba(0,0,0,0.05);'}
+                `;
+
+                // Add hover effect
+                block.addEventListener('mouseenter', () => {
+                    block.style.transform = 'scale(1.1)';
+                    block.style.zIndex = '10';
+                    block.style.boxShadow = '0 2px 4px rgba(0,0,0,0.2)';
+                });
+
+                block.addEventListener('mouseleave', () => {
+                    block.style.transform = 'scale(1)';
+                    block.style.zIndex = '1';
+                    block.style.boxShadow = 'none';
+                });
+
+                // Add tooltip
+                block.title = `${dayLabels[day]} ${hour}:00 - Value: ${displayNumber}`;
+
+                // Add number display
+                const numberSpan = document.createElement('span');
+                numberSpan.textContent = displayNumber;
+                block.appendChild(numberSpan);
+
+                blocksContainer.appendChild(block);
+            }
+
+            row.appendChild(blocksContainer);
+            mainContainer.appendChild(row);
+        }
+
+        return mainContainer;
+    }
+
+    /**
+     * Converts hex color to rgba with opacity
+     * @private
+     */
+    static _hexToRgba(hex, alpha) {
+        // Remove # if present
+        hex = hex.replace('#', '');
+        
+        // Parse hex values
+        const r = parseInt(hex.substring(0, 2), 16);
+        const g = parseInt(hex.substring(2, 4), 16);
+        const b = parseInt(hex.substring(4, 6), 16);
+        
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    /**
+     * Updates existing diagram with new data
+     * @param {HTMLElement} container - The diagram container
+     * @param {Array} data - New data array (7 days x 24 hours)
+     */
+    static update(container, data) {
+        if (!container || !container.classList.contains('block-day-diagram')) {
+            throw new Error('Invalid container element');
+        }
+
+        if (!Array.isArray(data) || data.length !== 7) {
+            throw new Error('Data must be an array of 7 arrays (one for each day)');
+        }
+
+        for (let i = 0; i < 7; i++) {
+            if (!Array.isArray(data[i]) || data[i].length !== 24) {
+                throw new Error(`Day ${i} must have 24 hours of data`);
+            }
+        }
+
+        const baseColor = '#4A90E2'; // Default, could be extracted from options
+        const rows = container.querySelectorAll('.block-day-row');
+
+        rows.forEach((row, day) => {
+            const blocks = row.querySelectorAll('.hour-block');
+            blocks.forEach((block, hour) => {
+                const blockData = data[day][hour] || { strength: 0, number: 0 };
+                const strength = Math.max(0, Math.min(1, blockData.strength || 0));
+                const displayNumber = blockData.number !== undefined ? blockData.number : '';
+
+                block.style.backgroundColor = this._hexToRgba(baseColor, strength);
+                block.querySelector('span').textContent = displayNumber;
+                
+                const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+                block.title = `${dayLabels[day]} ${hour}:00 - Value: ${displayNumber}`;
+            });
+        });
+    }
+
+    /**
+     * Creates sample data for testing
+     * @returns {Array} Sample data array (7 days x 24 hours)
+     */
+    static createSampleData() {
+        return Array.from({ length: 7 }, () =>
+            Array.from({ length: 24 }, () => ({
+                strength: Math.random(),
+                number: Math.floor(Math.random() * 100)
+            }))
+        );
+    }
+}
 
 class Span {}
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Aux, Storage, BlockHourDiagram };
+    module.exports = { Aux, Storage, BlockHourDiagram, BlockDayDiagram };
 }
