@@ -25,8 +25,6 @@ async function initNavigation() {
       // Load page-specific data
       if (pageName === 'home') {
         await loadHomePage();
-      } else if (pageName === 'settings') {
-        loadSettingsPage();
       } else if (pageName === 'reports') {
         loadReportsPage();
       }

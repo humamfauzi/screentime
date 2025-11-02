@@ -26,20 +26,17 @@ Screentime is a privacy-focused Chrome extension that helps you track and limit 
 
 ### Core Functionality
 1. **Local Data Storage** - All data stored locally using Chrome Storage API. No external servers or cloud storage.
-2. **Smart Notifications** - Alerts when approaching time limits (default: 90% threshold) and when limits are exceeded.
-3. **User-Friendly Interface** - Clean, modern design with gradient sidebar and three main sections:
+2. **User-Friendly Interface** - Clean, modern design with gradient sidebar and two main sections:
    - **Home**: Real-time today's activity overview
-   - **Settings**: Configure time limits and preferences
    - **Reports**: Historical data and detailed insights
-4. **Detailed Reporting** - View browsing activity with:
+3. **Detailed Reporting** - View browsing activity with:
    - Selectable time periods (7, 14, or 30 days)
    - Average daily browsing time
    - Most visited websites
    - Top websites with visual progress bars
    - Daily breakdown with top sites per day
-5. **Day-of-Week Customization** - Set different time limits for different days (e.g., more time on weekends, less on workdays).
-6. **Easy Installation** - Standard Chrome extension structure with clear documentation.
-7. **Open Source** - MIT License encourages community contributions and collaboration.
+4. **Easy Installation** - Standard Chrome extension structure with clear documentation.
+5. **Open Source** - MIT License encourages community contributions and collaboration.
 
 ### Interface Components
 
@@ -48,16 +45,7 @@ Screentime is a privacy-focused Chrome extension that helps you track and limit 
 - Total time spent browsing today
 - Number of websites visited
 - List of websites with time spent on each
-- Visual progress bars for sites with limits
-- Color-coded status (green = under limit, red = exceeded)
-
-#### Settings Page
-- Add new time limits for websites
-- Set daily time limit in minutes
-- Select active days of the week via checkboxes
-- Customize notification threshold (default: 90%)
-- View and manage current limits
-- Remove or edit existing limits
+- Visual hourly activity blocks for each website
 
 #### Reports Page
 - Time period selector (7/14/30 days)
@@ -74,14 +62,12 @@ Screentime is a privacy-focused Chrome extension that helps you track and limit 
 
 ### Design Principles
 1. Store all data locally to ensure privacy and security
-2. Implement notification system for time limit alerts
-3. Create user-friendly interface for easy configuration
-4. Provide detailed reporting and insights
-5. Allow day-of-week customization
-6. Ensure easy installation and configuration
-7. Encourage community contributions
-8. Open-source under MIT License
-9. Provide support channels (GitHub Issues)
+2. Create user-friendly interface for viewing activity
+3. Provide detailed reporting and insights
+4. Ensure easy installation and configuration
+5. Encourage community contributions
+6. Open-source under MIT License
+7. Provide support channels (GitHub Issues)
 
 ### Technical Architecture
 
@@ -93,20 +79,17 @@ Screentime is a privacy-focused Chrome extension that helps you track and limit 
 #### Background Service Worker (`background.js` / `background_v2.js`)
 - Tracks active tab and URL changes
 - Records time spent on each website
-- Triggers periodic checks for limit enforcement
-- Manages Chrome alarms for regular updates
-- Handles notification triggering
 - Implements smart focus tracking for accurate time measurement
+- Handles session management and focus periods
 
 #### Popup Interface (`popup.html`)
-- Single-page application with three views
+- Single-page application with two views
 - Client-side navigation via JavaScript
 - Responsive layout with fixed gradient sidebar
 - Modern, clean design
 
 #### JavaScript Modules
 - **`popup.js`**: Home page functionality and navigation
-- **`settings.js`**: Time limit configuration and management
 - **`reports.js`**: Historical data visualization and analytics
 - **`fn.js`**: Shared utility functions
 
@@ -120,23 +103,6 @@ Screentime is a privacy-focused Chrome extension that helps you track and limit 
 
 ```javascript
 {
-  settings: {
-    limits: {
-      'domain.com': {
-        limit: 3600,              // seconds
-        days: [0,1,2,3,4,5,6]     // 0=Sunday, 6=Saturday
-      }
-    },
-    notificationThreshold: 0.9    // 90%
-  },
-  activity: {
-    'YYYY-MM-DD': {
-      'domain.com': timeInSeconds
-    }
-  },
-  notifiedToday: {
-    'domain.com': true              // or 'exceeded'
-  },
   raw: {                            // background_v2.js structure
     'domain.com': {
       'sessionId': {
@@ -160,9 +126,7 @@ Screentime is a privacy-focused Chrome extension that helps you track and limit 
 
 ### Permissions Required
 - `storage` - Save data locally
-- `notifications` - Show alerts
 - `tabs` - Track active tabs
-- `alarms` - Periodic time checks
 - `<all_urls>` - Track any website
 
 ### Browser Compatibility
@@ -279,24 +243,7 @@ inkscape icon.svg --export-filename=icon128.png --export-width=128 --export-heig
 2. **Click the Screentime icon** in Chrome toolbar
 3. **Browse some websites** to generate initial data (YouTube, Twitter, GitHub, etc.)
 4. **Return to Screentime** to see your activity
-5. **Go to Settings** to add time limits
-6. **Check Reports** for historical insights
-
-### Setting Time Limits
-
-1. Click the Screentime extension icon
-2. Navigate to the **Settings** page (via sidebar)
-3. Enter a website domain:
-   - Format: `domain.com` (without `https://` or `www.`)
-   - Examples: `youtube.com`, `facebook.com`, `reddit.com`
-4. Set the daily time limit in minutes (e.g., `30`, `60`, `120`)
-5. Select which days of the week the limit should apply:
-   - Check boxes for specific days
-   - All days checked = limit applies every day
-   - Only weekdays = work-focused limits
-   - Only weekends = leisure-focused limits
-6. Click **"Add Limit"** button
-7. The limit will appear in the "Current Limits" list below
+5. **Check Reports** for historical insights
 
 ### Viewing Activity
 
@@ -307,8 +254,7 @@ inkscape icon.svg --export-filename=icon128.png --export-width=128 --export-heig
    - Total time spent browsing today
    - Number of websites visited
    - List of websites with time spent on each
-   - Progress bars for sites with limits
-   - Color coding: Green (under limit) or Red (exceeded)
+   - Visual hourly activity blocks for each website
 
 #### Reports Page (Historical Data)
 1. Navigate to the **Reports** page via sidebar
@@ -323,55 +269,24 @@ inkscape icon.svg --export-filename=icon128.png --export-width=128 --export-heig
 4. See top websites chart with visual progress bars
 5. Scroll down for daily breakdown showing top sites per day
 
-### Managing Notifications
-
-1. Go to **Settings** page
-2. Scroll to "Notification Settings" section
-3. Adjust the notification threshold slider (default: 90%)
-   - 90% = notification when you've used 90% of your daily limit
-   - 80% = earlier warning
-   - 100% = only notify when limit exceeded
-4. Changes save automatically
-
-### Notifications You'll Receive
-
-- **Approaching Limit**: When you reach your configured threshold (default: 90%)
-- **Limit Exceeded**: When you exceed your daily limit for a website
-- Notifications appear as Chrome desktop notifications
-- Click notification to open Screentime popup
-
-### Modifying or Removing Limits
-
-1. Go to **Settings** page
-2. Scroll to "Current Limits" section
-3. Find the website you want to modify
-4. Click **"Remove"** button to delete the limit
-5. To modify: Remove the old limit and add a new one with updated values
-
 ### Understanding Your Data
-
-#### Progress Bars
-- **Green bar**: Under your daily limit ✓
-- **Red bar**: Exceeded your daily limit ✗
-- **Percentage**: Shows how much of your limit you've used
 
 #### Time Display
 - Shows in format: `Xh Ym` (e.g., `2h 30m`)
 - For < 1 minute: Shows `<1m`
 - For < 1 hour: Shows only minutes (e.g., `45m`)
 
-#### Day-Specific Limits
-- Limits only apply on selected days
-- On non-selected days, no limit is enforced
-- Progress bar only shows on days when limit is active
+#### Hourly Activity Blocks
+- Visual representation of activity throughout the day
+- Each block represents one hour (0-23)
+- Block height shows relative activity during that hour
+- Helps identify peak browsing times
 
 ### Best Practices
 
-1. **Start Conservative**: Begin with stricter limits, adjust as needed
-2. **Different Days**: Set different limits for workdays vs. weekends
-3. **Check Reports**: Review weekly to identify patterns
-4. **Gradual Reduction**: Slowly decrease limits over time
-5. **Focus Time**: Set very low limits (10-15 min) during work hours
+1. **Check Reports**: Review weekly to identify patterns
+2. **Monitor Peak Hours**: Use hourly blocks to see when you browse most
+3. **Identify Trends**: Look for changes in browsing behavior over time
 
 ---
 
@@ -385,9 +300,8 @@ screentime/
 ├── background.js              # Time tracking logic (~200 lines)
 ├── background_v2.js           # Enhanced background worker (~400 lines)
 ├── background_v2.test.js      # Automated test suite
-├── popup.html                 # User interface (~180 lines)
+├── popup.html                 # User interface (~120 lines)
 ├── popup.js                   # Home page logic (~90 lines)
-├── settings.js                # Settings functionality (~150 lines)
 ├── reports.js                 # Reports logic (~170 lines)
 ├── fn.js                      # Shared utilities
 ├── styles.css                 # Styling (~450 lines)
@@ -423,7 +337,6 @@ screentime/
    - Background logic: `background.js` or `background_v2.js`
    - UI changes: `popup.html`, `styles.css`
    - Home page: `popup.js`
-   - Settings: `settings.js`
    - Reports: `reports.js`
 
 3. **Reload extension**:
@@ -466,24 +379,22 @@ screentime/
 chrome.storage.local.get(null, (data) => console.log(data));
 
 // View specific key
-chrome.storage.local.get(['settings'], (data) => console.log(data));
+chrome.storage.local.get(['raw'], (data) => console.log(data));
 
 // Clear all data
 chrome.storage.local.clear(() => console.log('Cleared'));
 
 // Clear specific key
-chrome.storage.local.remove(['activity'], () => console.log('Removed'));
+chrome.storage.local.remove(['raw'], () => console.log('Removed'));
 ```
 
 ### Privacy & Data
 
 #### What Data is Stored
 - Website domains you visit (e.g., `youtube.com`, `twitter.com`)
-- Time spent on each domain (in seconds)
-- Your configured time limits
-- Notification settings
-- Day-specific configurations
+- Time spent on each domain (in milliseconds)
 - Session metadata (tab IDs, window IDs, timestamps)
+- Focus periods for each session
 
 #### What is NOT Stored
 - Full URLs or specific pages visited
@@ -820,16 +731,13 @@ We welcome contributions from the community! This is an open-source project unde
 ### Ideas for Contributions
 
 #### Feature Enhancements
-- [ ] Website blocking when limit exceeded
-- [ ] Export/import settings and data
+- [ ] Export/import data
 - [ ] More detailed statistics and charts
 - [ ] Website categories (social media, work, news, etc.)
-- [ ] Focus mode or Pomodoro timer
 - [ ] Dark mode / theme customization
-- [ ] Break reminders
-- [ ] Weekly/monthly summary emails
-- [ ] Productivity scores
-- [ ] Goals and streaks
+- [ ] Weekly/monthly summary reports
+- [ ] Productivity insights
+- [ ] Time limits and notifications (future feature)
 
 #### Technical Improvements
 - [ ] Performance optimization for 100+ tabs
@@ -897,11 +805,6 @@ If you'd like to publish your fork:
 - **Solution**: Ensure browser has focus and tab is active
 - **Check**: Service worker is running (no errors in console)
 - **Try**: Reload extension from `chrome://extensions/`
-
-**Problem**: Notifications not appearing
-- **Solution**: Check Chrome notification permissions
-- **Path**: Chrome Settings → Privacy → Site Settings → Notifications
-- **Verify**: Chrome notifications are enabled for extensions
 
 **Problem**: Data not persisting
 - **Solution**: Check Chrome storage isn't full
@@ -985,7 +888,6 @@ background.js          Background service worker (time tracking)
 background_v2.js       Enhanced background worker (improved tracking)
 popup.html             Main UI structure
 popup.js               Home page functionality
-settings.js            Settings page functionality
 reports.js             Reports page functionality
 fn.js                  Shared utility functions
 styles.css             Complete styling
@@ -1056,17 +958,14 @@ git push origin feature/my-feature
 // View all storage
 chrome.storage.local.get(null, data => console.log(data));
 
-// View settings
-chrome.storage.local.get(['settings'], data => console.log(data));
-
-// View activity
-chrome.storage.local.get(['activity'], data => console.log(data));
+// View raw tracking data
+chrome.storage.local.get(['raw'], data => console.log(data));
 
 // Clear all data
 chrome.storage.local.clear(() => console.log('Cleared'));
 
 // Clear specific data
-chrome.storage.local.remove(['activity'], () => console.log('Removed'));
+chrome.storage.local.remove(['raw'], () => console.log('Removed'));
 
 // Get current tab info
 chrome.tabs.query({active: true, currentWindow: true}, tabs => console.log(tabs[0]));
@@ -1098,9 +997,8 @@ Browser Actions:
 **Version 1.0.0**
 - Initial release
 - Basic time tracking
-- Notification system
-- Settings and reports pages
-- Day-of-week customization
+- Home and reports pages
+- Simple activity display
 
 ### Roadmap
 
