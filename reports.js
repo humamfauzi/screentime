@@ -152,16 +152,3 @@ async function displayDailyBreakdown(startTimestamp, endTimestamp) {
   const diagramContainer = dailyBreakdownEl.querySelector('#block-diagram-container');
   diagramContainer.appendChild(diagram);
 }
-
-function formatTime(milliseconds) {
-  // Convert milliseconds to seconds
-  const totalSeconds = Math.floor(milliseconds / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`;
-  } else {
-    return `${minutes}m`;
-  }
-}

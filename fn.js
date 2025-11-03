@@ -73,6 +73,54 @@ class Aux {
         const endOfWeek = startOfWeek + 7 * 86400000 - 1; // End of the week
         return [startOfWeek, endOfWeek];
     }
+
+    static focusDivision(start, total) {
+        const totalSeconds = Math.ceil(total / 1000); // convert ms to seconds
+        const firstHour = start.getHours();
+        const divisions = Array.from({ length: 24 }, () => 0); // seconds per hour
+        divisions[firstHour] += Math.min(totalSeconds, 3600); // cap at 1 hour
+        let remaining = totalSeconds - 3600;
+        let currentHour = firstHour + 1;
+        while (remaining > 0 && currentHour < 24) {
+            divisions[currentHour] += Math.min(remaining, 3600);
+            remaining -= 3600;
+            currentHour++;
+        }
+        return divisions;
+    }
+}
+
+class ManualTest {
+    static async collectFocusToday() {
+        const dateObj = new Date();
+        const startDayUnix = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()).getTime();
+        const endDayUnix = startDayUnix + 86400000 - 1; // End of the day
+        return ManualTest.collectFocus(startDayUnix, endDayUnix);
+    }
+    static async collectFocus(start, end) {
+        const raw = await Storage.getRaw();
+        const focus = []
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.start >= start && session.start <= end && session.focus) {
+                    for (const focusId in session.focus) {
+                        const f = session.focus[focusId];
+                        focus.push({
+                            url: url,
+                            start_unix: f.start,
+                            start: new Date(f.start).toLocaleString(),
+                            end: new Date(f.end).toLocaleString(),
+                            total: Math.ceil(f.total / 1000)
+                        })
+                    }
+                }
+            }
+        }
+        focus.sort((a, b) => a.start_unix - b.start_unix);
+        return focus;
+    }
 }
 
 class Storage {
@@ -154,6 +202,7 @@ class Storage {
                     for (const focusId in session.focus) {
                         const focus = session.focus[focusId];
                         if (focus.total && focus.start >= start && focus.start <= end) {
+                            console.log("URLS", url, (new Date(focus.start)).toLocaleTimeString(), new Date(focus.end).toLocaleTimeString())
                             focusSum += focus.total;
                         }
                     }
@@ -208,7 +257,7 @@ class Storage {
         return null;
     }
     
-    static async insertSession(url, tabId, windowId) {
+    static async insertSession(url, tabId, windowId, reason="") {
         if (!Aux.isEligibleUrl(url)) {
             return;
         }
@@ -221,11 +270,12 @@ class Storage {
             start: Date.now(),
             tabId: tabId,
             windowId: windowId,
+            reason
         };
         await this.saveRaw(raw);
     }
 
-    static async insertFocus(url, sessionId) {
+    static async insertFocus(url, sessionId, reason="") {
         // A focus might get triggered when seeing chrome settings and such
         if (!Aux.isEligibleUrl(url)) return;
         const focusId = Aux.generateId();
@@ -243,11 +293,12 @@ class Storage {
         }
         selected.focus[focusId] = {
             start: Date.now(),
+            reason: reason
         };
         await this.saveRaw(raw);
     }
 
-    static async endURLSession(url, sessionId) {
+    static async endURLSession(url, sessionId, reason="") {
         if (!Aux.isEligibleUrl(url)) {
             return;
         }
@@ -262,10 +313,11 @@ class Storage {
         }
         currentSession.end = Date.now();
         currentSession.total = currentSession.end - currentSession.start;
+        currentSession.endReason = reason
         await this.saveRaw(raw);
     }
 
-    static async endFocus(url, sessionId) {
+    static async endFocus(url, sessionId, reason) {
         if (!Aux.isEligibleUrl(url)) {
             return;
         }
@@ -286,10 +338,11 @@ class Storage {
         const now = Date.now();
         currentFocus.end = now;
         currentFocus.total = currentFocus.end - currentFocus.start;
+        currentFocus.endReason = reason
         await this.saveRaw(raw);
     }
 
-    static async endFocusAllExcept(windowId, selectedTabId) {
+    static async endFocusAllExcept(windowId, selectedTabId, reason="") {
         // Instead of querying all tabs, we iterate through storage to find active focus sessions
         // This is more efficient and works even when tabs are being closed
         const raw = await this.getRaw();
@@ -306,7 +359,7 @@ class Storage {
                     if (session.focus) {
                         const hasFocus = Object.values(session.focus).some(f => !f.end);
                         if (hasFocus) {
-                            await this.endFocus(url, sessionId);
+                            await this.endFocus(url, sessionId, reason);
                         }
                     }
                 }
@@ -315,7 +368,7 @@ class Storage {
     }
 
     // Helper method: Find and end session by tabId and windowId
-    static async findAndEndSession(tabId, windowId) {
+    static async findAndEndSession(tabId, windowId, reason="") {
         const raw = await this.getRaw();
         
         for (const url in raw) {
@@ -353,7 +406,7 @@ class Storage {
     }
 
     // Helper method: End all focus globally (across all windows)
-    static async endAllFocusGlobally() {
+    static async endAllFocusGlobally(reason) {
         const raw = await this.getRaw();
         
         for (const url in raw) {
@@ -363,7 +416,7 @@ class Storage {
                 if (!session.end && session.focus) {
                     const hasFocus = Object.values(session.focus).some(f => !f.end);
                     if (hasFocus) {
-                        await this.endFocus(url, sessionId);
+                        await this.endFocus(url, sessionId, reason);
                     }
                 }
             }
@@ -371,7 +424,7 @@ class Storage {
     }
 
     // Helper method: End all active sessions in a specific window
-    static async endAllSessionsInWindow(windowId) {
+    static async endAllSessionsInWindow(windowId, reason="") {
         const raw = await this.getRaw();
         
         for (const url in raw) {
@@ -379,15 +432,15 @@ class Storage {
             for (const sessionId in sessions) {
                 const session = sessions[sessionId];
                 if (session.windowId === windowId && !session.end) {
-                    await this.endFocus(url, sessionId);
-                    await this.endURLSession(url, sessionId);
+                    await this.endFocus(url, sessionId, reason);
+                    await this.endURLSession(url, sessionId, reason);
                 }
             }
         }
     }
 
     // Helper method: End all active sessions globally
-    static async endAllActiveSessions() {
+    static async endAllActiveSessions(reason="") {
         const raw = await this.getRaw();
         
         for (const url in raw) {
@@ -395,15 +448,15 @@ class Storage {
             for (const sessionId in sessions) {
                 const session = sessions[sessionId];
                 if (!session.end) {
-                    await this.endFocus(url, sessionId);
-                    await this.endURLSession(url, sessionId);
+                    await this.endFocus(url, sessionId, reason);
+                    await this.endURLSession(url, sessionId, reason);
                 }
             }
         }
     }
 
     // Helper method: End focus in all windows except one
-    static async endFocusInOtherWindows(windowId) {
+    static async endFocusInOtherWindows(windowId, reason="") {
         const raw = await this.getRaw();
         
         for (const url in raw) {
@@ -413,7 +466,7 @@ class Storage {
                 if (session.windowId !== windowId && !session.end && session.focus) {
                     const hasFocus = Object.values(session.focus).some(f => !f.end);
                     if (hasFocus) {
-                        await this.endFocus(url, sessionId);
+                        await this.endFocus(url, sessionId, reason);
                     }
                 }
             }
@@ -427,7 +480,7 @@ class Storage {
         const endDay = startDay + 24 * 60 * 60 * 1000; // 24 hours in ms
 
         const raw = await this.getRaw();
-        let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: 0 }));
+        let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: "" }));
         if (!raw[url]) {
             return hourData; // No data for this URL
         }
@@ -440,25 +493,11 @@ class Storage {
                     const focus = session.focus[focusId];
                     if (focus.total && focus.start >= startDay && focus.start < endDay) {
                         const focusStart = new Date(focus.start);
-                        const hour = focusStart.getHours();
-                        hourData[hour].strength += focus.total / 3600000; // convert to hours for strength
+                        const focdiv = Aux.focusDivision(focusStart, focus.total)
+                        for (let h = 0; h < 24; h++) {
+                            hourData[h].strength += focdiv[h] 
+                        }
                     }
-                }
-            }
-        }
-        for (const sessionId in sessions) {
-            const session = sessions[sessionId];
-            // Only consider sessions that overlap with today
-            if (session.start < endDay && (!session.end || session.end > startDay)) {
-                // Calculate the start and end hour indices for this session within today
-                const sessionStart = Math.max(session.start, startDay);
-                const sessionEnd = Math.min(session.end || endDay, endDay - 1);
-                const startHour = new Date(sessionStart).getHours();
-                const endHour = new Date(sessionEnd).getHours();
-
-                // For each hour the session is active, increment the count
-                for (let h = startHour; h <= endHour; h++) {
-                    hourData[h].number += 1;
                 }
             }
         }
@@ -537,8 +576,8 @@ class BlockHourDiagram {
         // Create 24 blocks
         for (let i = 0; i < 24; i++) {
             const blockData = data[i] || { strength: 0, number: 0 };
-            const strength = Math.max(0, Math.min(1, blockData.strength || 0));
-            const displayNumber = blockData.number !== undefined ? blockData.number : '';
+            const strength = blockData.strength / 3600;
+            const displayNumber = blockData.strength !== undefined ? blockData.strength : '';
 
             const block = document.createElement('div');
             block.className = 'hour-block';
@@ -580,7 +619,7 @@ class BlockHourDiagram {
 
             // Add number display
             const numberSpan = document.createElement('span');
-            numberSpan.textContent = displayNumber;
+            numberSpan.textContent = "";
             block.appendChild(numberSpan);
 
             container.appendChild(block);
@@ -917,5 +956,5 @@ class BlockDayDiagram {
 class Span {}
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Aux, Storage, BlockHourDiagram, BlockDayDiagram };
+    module.exports = { Aux, Storage, BlockHourDiagram, BlockDayDiagram, ManualTest };
 }

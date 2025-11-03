@@ -34,8 +34,6 @@ async function initNavigation() {
 
 // Load home page data
 async function loadHomePage() {
-  const today = getTodayString();
-  
   // Display current date
   const dateElement = document.getElementById('current-date');
   const dateObj = new Date();
@@ -56,7 +54,6 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
   const sitesCountElement = document.getElementById('sites-count');
 
   const domains = Object.keys(totalFocusByURL);
-  
   if (domains.length === 0) {
     activityItems.innerHTML = `
       <div class="empty-state">
@@ -64,7 +61,7 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
         <p class="empty-hint">Start browsing to see your activity here</p>
       </div>
     `;
-    totalTimeElement.textContent = '0h 0m';
+    totalTimeElement.textContent = '0h 0m';Storage
     sitesCountElement.textContent = '0';
     return;
   }
@@ -85,7 +82,7 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
     const activityItem = document.createElement('div');
     activityItem.className = 'activity-item';
     
-    // Create header with domain and time
+    // Create header with doain and time
     const activityHeader = document.createElement('div');
     activityHeader.className = 'activity-header';
     activityHeader.innerHTML = `
@@ -97,6 +94,7 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
     
     // Generate and add block hour diagram
     const hourData = await Storage.generateBlockHourData(domain);
+    console.log(`Hour data for ${domain}:`, hourData);
     const blockDiagram = BlockHourDiagram.create(hourData, {
       height: '40px',
       baseColor: '#4A90E2',
@@ -107,7 +105,6 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
     // Add some spacing
     blockDiagram.style.marginTop = '8px';
     activityItem.appendChild(blockDiagram);
-    
     activityItems.appendChild(activityItem);
   }
 }
@@ -116,6 +113,7 @@ function formatTime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   
+  console.log(`Formatting time: ${seconds}s as ${hours}h ${minutes}m`);
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   } else {
