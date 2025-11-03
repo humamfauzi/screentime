@@ -583,9 +583,8 @@ class BlockHourDiagram {
             block.className = 'hour-block';
             block.dataset.hour = i;
             
-            // Add quarter-day markers (after hours 6, 12, 18)
-            const hasMarker = i === 6 || i === 12 || i === 18;
-            
+            // Add quarter-day markers (after hours 6, 12, 18) minus one because index start from 0
+            const hasMarker = i === 5 || i === 11 || i === 17;
             block.style.cssText = `
                 flex: 1;
                 display: flex;
@@ -624,7 +623,6 @@ class BlockHourDiagram {
 
             container.appendChild(block);
         }
-
         return container;
     }
 
