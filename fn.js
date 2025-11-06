@@ -712,8 +712,9 @@ class BlockHourDiagram {
         }
 
         const defaults = {
-            width: '100%',
-            height: '30px',
+            width: 'fit-content',
+            height: '18px',
+            blockSize: '18px',
             baseColor: '#4A90E2',
             textColor: '#333',
             borderColor: '#ddd',
@@ -727,11 +728,10 @@ class BlockHourDiagram {
         const container = document.createElement('div');
         container.className = 'block-hour-diagram';
         container.style.cssText = `
-            display: flex;
+            display: inline-flex;
             width: ${config.width};
             height: ${config.height};
             border: 1px solid ${config.borderColor};
-            border-radius: 4px;
             overflow: hidden;
         `;
 
@@ -748,7 +748,11 @@ class BlockHourDiagram {
             // Add quarter-day markers (after hours 6, 12, 18) minus one because index start from 0
             const hasMarker = i === 5 || i === 11 || i === 17;
             block.style.cssText = `
-                flex: 1;
+                flex: 0 0 ${config.blockSize};
+                min-width: ${config.blockSize};
+                max-width: ${config.blockSize};
+                width: ${config.blockSize};
+                height: ${config.blockSize};
                 display: flex;
                 align-items: center;
                 justify-content: center;
@@ -759,6 +763,7 @@ class BlockHourDiagram {
                 transition: all 0.2s;
                 cursor: pointer;
                 position: relative;
+                box-sizing: border-box;
                 ${hasMarker ? `border-right: ${config.quarterMarkWidth} solid ${config.quarterMarkColor};` : 'border-right: 1px solid rgba(0,0,0,0.05);'}
             `;
 

@@ -96,8 +96,6 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
     // Generate block hour diagram
     const hourData = await Storage.generateBlockHourData(domain);
     const blockDiagram = BlockHourDiagram.create(hourData, {
-      height: '100%',
-      width: '100%',
       baseColor: '#4A90E2',
       textColor: '#fff',
       borderColor: '#e0e0e0'
