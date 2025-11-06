@@ -75,16 +75,17 @@ class Aux {
     }
 
     static focusDivision(start, total) {
-        const totalSeconds = Math.ceil(total / 1000); // convert ms to seconds
-        const firstHour = start.getHours();
+        let remaining = Math.ceil(total / 1000); // convert ms to seconds
+        let currentHour = start.getHours();
         const divisions = Array.from({ length: 24 }, () => 0); // seconds per hour
-        divisions[firstHour] += Math.min(totalSeconds, 3600); // cap at 1 hour
-        let remaining = totalSeconds - 3600;
-        let currentHour = firstHour + 1;
+        let unixStart = start.getTime();
         while (remaining > 0 && currentHour < 24) {
-            divisions[currentHour] += Math.min(remaining, 3600);
-            remaining -= 3600;
+            const nextUnixHour = new Date(start.getFullYear(), start.getMonth(), start.getDate(), currentHour + 1).getTime();
+            const secondsToNextHour = Math.ceil((nextUnixHour - unixStart) / 1000);
+            divisions[currentHour] += Math.min(secondsToNextHour, remaining);
+            remaining -= secondsToNextHour;
             currentHour++;
+            unixStart = nextUnixHour;
         }
         return divisions;
     }
@@ -109,10 +110,13 @@ class ManualTest {
                         const f = session.focus[focusId];
                         focus.push({
                             url: url,
+                            focus_id: focusId,
                             start_unix: f.start,
                             start: new Date(f.start).toLocaleString(),
                             end: new Date(f.end).toLocaleString(),
-                            total: Math.ceil(f.total / 1000)
+                            total: Math.ceil(f.total / 1000),
+                            start_reason: f.reason || "NO REASON",
+                            end_reason: f.endReason || "NO REASON"
                         })
                     }
                 }
@@ -120,6 +124,128 @@ class ManualTest {
         }
         focus.sort((a, b) => a.start_unix - b.start_unix);
         return focus;
+    }
+
+    static async activeFocus() {
+        const raw = await Storage.getRaw();
+        const focus = []
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.focus) {
+                    for (const focusId in session.focus) {
+                        const f = session.focus[focusId];
+                        if (!f.end) {
+                            focus.push({
+                                url: url,
+                                focus_id: focusId,
+                                start_unix: f.start,
+                                start: new Date(f.start).toLocaleString(),
+                                reason: f.reason || "NO REASON"
+                            })
+                        }
+                    }
+                }
+            }
+        }
+        return focus;
+    }
+
+    static async activeSession() {
+        const raw = await Storage.getRaw();
+        const activeSessions = [];
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (!session.end) {
+                    activeSessions.push({
+                        url,
+                        session_id: sessionId,
+                        start_unix: session.start,
+                        start: new Date(session.start).toLocaleString(),
+                        tabId: session.tabId,
+                        windowId: session.windowId,
+                        reason: session.reason || "NO REASON"
+                    });
+                }
+            }
+        }
+        return activeSessions;
+    }
+}
+
+class Debug {
+    static storageKey = 'debug';
+    
+    static async get() {
+        const data = await chrome.storage.local.get([this.storageKey]);
+        return data[this.storageKey];
+    }
+    static async save(data, obj) {
+        data.push(obj);
+        await chrome.storage.local.set({ [this.storageKey]: data });
+    }
+    static async logEventInstalled() {
+        const message = "Extension installed";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message });
+    }
+    static async logEventStartup() {
+        const message = "Extension started";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message });
+    }
+    static async logEventTabCreated(props) {
+        const message = "Tab created";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventTabUpdated(props) {
+        const message = "Tab updated";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventTabActivated(props) {
+        const message = "Tab activated";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventTabRemoved(props) {
+        const message = "Tab removed"
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventTabDetached(props = {}) {
+        const message = "Tab detached";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventTabAttached(props = {}) {
+        const message = "Tab attached";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventTabReplaced(props = {}) {
+        const message = "Tab replaced";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventWindowFocusChanged(props = {}) {
+        const message = "Window focus changed";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventWindowRemoved(props = {}) {
+        const message = "Window removed";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
+    }
+    static async logEventSuspend(props = {}) {
+        const message = "System suspend";
+        const data = await this.get() || [];
+        await this.save(data, { timestamp: Date.now(), message, ...props });
     }
 }
 
@@ -202,7 +328,6 @@ class Storage {
                     for (const focusId in session.focus) {
                         const focus = session.focus[focusId];
                         if (focus.total && focus.start >= start && focus.start <= end) {
-                            console.log("URLS", url, (new Date(focus.start)).toLocaleTimeString(), new Date(focus.end).toLocaleTimeString())
                             focusSum += focus.total;
                         }
                     }
@@ -346,7 +471,6 @@ class Storage {
         // Instead of querying all tabs, we iterate through storage to find active focus sessions
         // This is more efficient and works even when tabs are being closed
         const raw = await this.getRaw();
-        
         for (const url in raw) {
             const sessions = raw[url];
             for (const sessionId in sessions) {
@@ -370,14 +494,13 @@ class Storage {
     // Helper method: Find and end session by tabId and windowId
     static async findAndEndSession(tabId, windowId, reason="") {
         const raw = await this.getRaw();
-        
         for (const url in raw) {
             const sessions = raw[url];
             for (const sessionId in sessions) {
                 const session = sessions[sessionId];
                 if (session.windowId === windowId && session.tabId === tabId && !session.end) {
-                    await this.endFocus(url, sessionId);
-                    await this.endURLSession(url, sessionId);
+                    await this.endFocus(url, sessionId, reason);
+                    await this.endURLSession(url, sessionId, reason);
                     return true; // Found and ended
                 }
             }
@@ -494,6 +617,7 @@ class Storage {
                     if (focus.total && focus.start >= startDay && focus.start < endDay) {
                         const focusStart = new Date(focus.start);
                         const focdiv = Aux.focusDivision(focusStart, focus.total)
+                        console.log(`${url}-${new Date(focus.start).toLocaleString()}-${new Date(focus.end).toLocaleString()}:`, focdiv);
                         for (let h = 0; h < 24; h++) {
                             hourData[h].strength += focdiv[h] 
                         }
@@ -954,5 +1078,5 @@ class BlockDayDiagram {
 class Span {}
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Aux, Storage, BlockHourDiagram, BlockDayDiagram, ManualTest };
+    module.exports = { Aux, Storage, BlockHourDiagram, BlockDayDiagram, ManualTest, Debug };
 }

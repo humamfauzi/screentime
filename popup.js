@@ -94,7 +94,6 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
     
     // Generate and add block hour diagram
     const hourData = await Storage.generateBlockHourData(domain);
-    console.log(`Hour data for ${domain}:`, hourData);
     const blockDiagram = BlockHourDiagram.create(hourData, {
       height: '40px',
       baseColor: '#4A90E2',
@@ -112,8 +111,6 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
 function formatTime(seconds) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
-  
-  console.log(`Formatting time: ${seconds}s as ${hours}h ${minutes}m`);
   if (hours > 0) {
     return `${hours}h ${minutes}m`;
   } else {

@@ -1,3 +1,6 @@
+if (typeof require !== 'undefined') {
+    // { ManualTest, Debug } = require("./fn");
+}
 
 if (typeof importScripts !== 'undefined') {
     importScripts('fn.js');
@@ -12,7 +15,8 @@ const ev = {
     tabDetached: 'tab_detached',
     tabAttached: 'tab_attached',
     tabReplaced: 'tab_replaced',
-    windowFocusChanged: 'window_focus_changed',
+    windowFocusLost: 'window_focus_lost',
+    windowFocusGained: 'window_focus_gained',
     windowRemoved: 'window_removed',
     suspend: 'suspend',
     domainChanged: 'domain_changed',
@@ -21,11 +25,17 @@ const ev = {
 
 // event when extension is installed or initiated
 chrome.runtime.onInstalled.addListener(async () => {
+    await Debug.logEventInstalled();
+    const raw = await Storage.getRaw();
+    if (raw && Object.keys(raw).length > 0) {
+        return;
+    }
     await Storage.saveRaw({});
 })
 
 // event when browser starts (not just extension install/update)
 chrome.runtime.onStartup.addListener(async () => {
+    await Debug.logEventStartup();
     try {
         // Browser is starting, initialize tracking for all existing tabs
         const windows = await chrome.windows.getAll({ populate: true });
@@ -33,7 +43,6 @@ chrome.runtime.onStartup.addListener(async () => {
         for (const window of windows) {
             for (const tab of window.tabs) {
                 if (!Aux.isEligibleUrl(tab.url)) continue;
-                
                 const tld = Aux.getTLD(tab.url);
                 
                 // Create session for this tab
@@ -54,6 +63,7 @@ chrome.runtime.onStartup.addListener(async () => {
 })
 
 chrome.tabs.onCreated.addListener(async (tab) => {
+    await Debug.logEventTabCreated({tab});
     const tabId = tab.id;
     const windowId = tab.windowId;
     const tld = Aux.getTLD(tab.url);
@@ -83,6 +93,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         if (!changeInfo.url) {
             return;
         }
+        await Debug.logEventTabUpdated({tabId, changeInfo, tab});
         
         const newUrl = changeInfo.url;
         const newTld = Aux.getTLD(newUrl);
@@ -144,6 +155,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 
 // event when a tab is deactivated (loses focus)
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
+    await Debug.logEventTabActivated({activeInfo});
     try {
         // This fires when a new tab becomes active
         // We need to end focus on the previously active tab and start focus on the new one
@@ -151,6 +163,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         // Get the newly activated tab first to ensure it exists and is valid
         const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
         if (!activeTab || !activeTab.url) {
+            console.log(`Tab activated: ${activeTab}`)
             return; // Tab doesn't exist or has no URL yet
         }
         
@@ -158,6 +171,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         await Storage.endFocusAllExcept(activeInfo.windowId, activeInfo.tabId, ev.tabDeactivated);
 
         const activeTld = Aux.getTLD(activeTab.url);
+        console.log(`Tab activated: ${activeTab.id} in window ${activeTab.windowId} with URL ${activeTab.url}`);
         
         // Skip if URL is not eligible for tracking
         if (!Aux.isEligibleUrl(activeTab.url)) {
@@ -181,12 +195,14 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
+    await Debug.logEventTabRemoved({tabId, removeInfo});
     // Tab is already removed, so we need to find and end it from storage
     await Storage.findAndEndSession(tabId, removeInfo.windowId, ev.tabRemoved);
 })
 
 // event when tab is detached from a window (e.g., dragged to become new window or moved)
 chrome.tabs.onDetached.addListener(async (tabId, detachInfo) => {
+    await Debug.logEventTabDetached({tabId, detachInfo});
     try {
         // Tab is being moved, end focus (it will restart when attached)
         // We keep the session alive but end focus during the transition
@@ -209,6 +225,7 @@ chrome.tabs.onDetached.addListener(async (tabId, detachInfo) => {
 
 // event when tab is attached to a window (after being detached)
 chrome.tabs.onAttached.addListener(async (tabId, attachInfo) => {
+    await Debug.logEventTabAttached({tabId, attachInfo});
     try {
         // Tab has been attached to a new window, update the windowId in session
         const raw = await Storage.getRaw();
@@ -246,6 +263,7 @@ chrome.tabs.onAttached.addListener(async (tabId, attachInfo) => {
 
 // event when tab is replaced (rare, but can happen with prerendering or instant navigation)
 chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
+    await Debug.logEventTabReplaced({addedTabId, removedTabId});
     try {
         // A tab has been replaced with another tab
         // Transfer the session from the old tab to the new tab
@@ -277,17 +295,18 @@ chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
 
 // event when we choose another chrome windows
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
+    await Debug.logEventWindowFocusChanged({windowId});
     try {
         if (windowId === chrome.windows.WINDOW_ID_NONE) {
             // Browser lost focus (user switched to another application)
-            await Storage.endAllFocusGlobally(ev.windowFocusChanged);
+            await Storage.endAllFocusGlobally(ev.windowFocusLost);
             return;
         }
         
         // Browser gained focus on a specific window
         // End focus on tabs in other windows
-        await Storage.endFocusInOtherWindows(windowId, ev.windowFocusChanged);
-        
+        await Storage.endFocusInOtherWindows(windowId, ev.windowFocusLost);
+
         // Get the active tab in the focused window
         const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
         if (tabs.length === 0) return;
@@ -300,12 +319,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
         // Ensure session exists
         let sessionId = await Storage.findActiveSessionId(tld, activeTab.windowId, activeTab.id);
         if (!sessionId) {
-            await Storage.insertSession(tld, activeTab.id, activeTab.windowId, ev.windowFocusChanged);
+            await Storage.insertSession(tld, activeTab.id, activeTab.windowId, ev.windowFocusGained);
             sessionId = await Storage.findActiveSessionId(tld, activeTab.windowId, activeTab.id);
         }
         
         if (sessionId) {
-            await Storage.insertFocus(tld, sessionId, ev.windowFocusChanged);
+            await Storage.insertFocus(tld, sessionId, ev.windowFocusGained);
         }
     } catch (error) {
         console.error('Error in onFocusChanged listener:', error);
@@ -313,6 +332,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 })
 
 chrome.windows.onRemoved.addListener(async (windowId) => {
+    await Debug.logEventWindowRemoved({windowId});
     try {
         // Window is already removed, end all sessions in this window
         await Storage.endAllSessionsInWindow(windowId, ev.windowRemoved);
@@ -323,6 +343,7 @@ chrome.windows.onRemoved.addListener(async (windowId) => {
 
 // event when extension is being suspended; should be consider to end all on going records
 chrome.runtime.onSuspend.addListener(async () => {
+    await Debug.logEventSuspend();
     // End all active sessions across all windows
     await Storage.endAllActiveSessions(ev.suspend);
 })
