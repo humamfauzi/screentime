@@ -34,34 +34,37 @@ chrome.runtime.onInstalled.addListener(async () => {
 })
 
 // event when browser starts (not just extension install/update)
+// how to test:
+// 1. Close all browser windows
+// 2. Reopen browser
+// Note: Pinned tab would be considered as tab updated not tab creation
+
 chrome.runtime.onStartup.addListener(async () => {
     await Debug.logEventStartup();
-    try {
-        // Browser is starting, initialize tracking for all existing tabs
-        const windows = await chrome.windows.getAll({ populate: true });
-        
-        for (const window of windows) {
-            for (const tab of window.tabs) {
-                if (!Aux.isEligibleUrl(tab.url)) continue;
-                const tld = Aux.getTLD(tab.url);
-                
-                // Create session for this tab
-                await Storage.insertSession(tld, tab.id, tab.windowId, ev.startup);
-                
-                // If this tab is active and window is focused, start focus tracking
-                if (tab.active && window.focused) {
-                    const sessionId = await Storage.findActiveSessionId(tld, tab.windowId, tab.id);
-                    if (sessionId) {
-                        await Storage.insertFocus(tld, sessionId);
-                    }
+    const windows = await chrome.windows.getAll({ populate: true });
+    for (const window of windows) {
+        for (const tab of window.tabs) {
+            if (!Aux.isEligibleUrl(tab.url)) continue;
+            const tld = Aux.getTLD(tab.url);
+            await Storage.insertSession(tld, tab.id, tab.windowId, ev.startup);
+            
+            if (tab.active && window.focused) {
+                const sessionId = await Storage.findActiveSessionId(tld, tab.windowId, tab.id);
+                if (sessionId) {
+                    await Storage.insertFocus(tld, sessionId);
                 }
             }
         }
-    } catch (error) {
-        console.error('Error in onStartup listener:', error);
     }
 })
 
+// how to test
+// 1. Open a new tab with the middle click so it doesnt get focus right away
+// this would trigger the event but Chrome registers the URL under key `pendingUrl`
+// therefore, it wont get triggered.
+// After that, Chrome would trigger another event onUpdated when the URL is actually set\
+// this is when the actual URL is known and we can start tracking it.
+// so to conclude, no URL would get recorded on tab creation, only on tab update.
 chrome.tabs.onCreated.addListener(async (tab) => {
     await Debug.logEventTabCreated({tab});
     const tabId = tab.id;
@@ -87,73 +90,22 @@ chrome.tabs.onCreated.addListener(async (tab) => {
 })
 
 // event when there is change in tab properties
+// A title change can trigger this event, but we only care about URL changes
+// however, chrome do a two step event when a new tab is created:
+// 1. onCreated with pendingUrl
+// 2. onUpdated with actual URL
+// Therefore, this event handle both new tab and URL changes in existing tabs
+// the harder problem is that we dont know the previous URL of the tab to end its session
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    try {
-        // Only process when URL actually changes
-        if (!changeInfo.url) {
-            return;
-        }
-        await Debug.logEventTabUpdated({tabId, changeInfo, tab});
-        
-        const newUrl = changeInfo.url;
-        const newTld = Aux.getTLD(newUrl);
-        const newUrlEligible = Aux.isEligibleUrl(newUrl);
-        
-        // Find if there's an existing active session for this tab
-        // We need to search through all URLs since we don't know the previous URL
-        const raw = await Storage.getRaw();
-        let previousTld = null;
-        let previousSessionId = null;
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === tab.windowId && session.tabId === tabId && !session.end) {
-                    previousTld = url;
-                    previousSessionId = sessionId;
-                    break;
-                }
-            }
-            if (previousSessionId) break;
-        }
-        
-        // Determine what to do based on previous and new states
-        const hasPreviousSession = previousSessionId !== null;
-        const domainChanged = previousTld !== newTld;
-        
-        if (hasPreviousSession && (domainChanged || !newUrlEligible)) {
-            // End the previous session when:
-            // 1. Domain changed (youtube.com -> twitter.com)
-            // 2. Or navigating to ineligible URL (youtube.com -> chrome://settings)
-            await Storage.endFocus(previousTld, previousSessionId, ev.domainChanged);
-            await Storage.endURLSession(previousTld, previousSessionId, ev.domainChanged);
-        }
-        
-        if (newUrlEligible) {
-            if (!hasPreviousSession || domainChanged) {
-                // Create new session when:
-                // 1. No previous session exists (ineligible -> eligible)
-                // 2. Or domain changed (youtube.com -> twitter.com)
-                await Storage.insertSession(newTld, tabId, tab.windowId, ev.tabUpdated);
-                
-                // If this tab is currently active, also start focus
-                if (tab.active) {
-                    const newSessionId = await Storage.findActiveSessionId(newTld, tab.windowId, tabId);
-                    if (newSessionId) {
-                        await Storage.insertFocus(newTld, newSessionId, ev.tabUpdated);
-                    }
-                }
-            }
-            // If same domain (youtube.com/video1 -> youtube.com/video2), do nothing
-            // The session continues tracking the same domain
-        }
-    } catch (error) {
-        console.error('Error in onUpdated listener:', error);
+    if (!changeInfo.url) {
+        return;
     }
+    await Debug.logEventTabUpdated({tabId, changeInfo, tab});
+        
 })
 
 // event when a tab is deactivated (loses focus)
+// When we close a tab and move to another tab, the onActivated event fires after onRemoved
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
     await Debug.logEventTabActivated({activeInfo});
     try {
@@ -163,7 +115,6 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         // Get the newly activated tab first to ensure it exists and is valid
         const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
         if (!activeTab || !activeTab.url) {
-            console.log(`Tab activated: ${activeTab}`)
             return; // Tab doesn't exist or has no URL yet
         }
         
@@ -171,7 +122,6 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         await Storage.endFocusAllExcept(activeInfo.windowId, activeInfo.tabId, ev.tabDeactivated);
 
         const activeTld = Aux.getTLD(activeTab.url);
-        console.log(`Tab activated: ${activeTab.id} in window ${activeTab.windowId} with URL ${activeTab.url}`);
         
         // Skip if URL is not eligible for tracking
         if (!Aux.isEligibleUrl(activeTab.url)) {

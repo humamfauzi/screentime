@@ -1,4 +1,4 @@
-const _ = {
+let _ = {
     "raw": {
         "youtube.com": {
             // using a key because there might be multiple sessions even in same URL
@@ -23,12 +23,8 @@ class Aux {
         try {
             const urlObj = new URL(url);
             const hostname = urlObj.hostname;
-            const parts = hostname.split('.').filter(part => part !== 'www');
-            if (parts.length >= 2) {
-                return parts.slice(-2).join('.');
-            } else {
-                return hostname;
-            }
+            // Return full hostname including subdomains (e.g. docs.google.com)
+            return hostname;
         } catch (e) {
             return url;
         }
@@ -178,84 +174,162 @@ class ManualTest {
 
 class Debug {
     static storageKey = 'debug';
+    static saveLock = Promise.resolve();
     
     static async get() {
         const data = await chrome.storage.local.get([this.storageKey]);
         return data[this.storageKey];
     }
-    static async save(data, obj) {
-        data.push(obj);
-        await chrome.storage.local.set({ [this.storageKey]: data });
+    static async save(obj) {
+        this.saveLock = this.saveLock.then(async () => {
+            const data = await this.get() || [];
+            data.push(obj)
+            await chrome.storage.local.set({ [this.storageKey]: data });
+        })
+        return this.saveLock;
     }
     static async logEventInstalled() {
         const message = "Extension installed";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message });
+        await this.save({ timestamp: Date.now(), message });
     }
     static async logEventStartup() {
         const message = "Extension started";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message });
+        await this.save({ timestamp: Date.now(), message });
     }
     static async logEventTabCreated(props) {
         const message = "Tab created";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventTabUpdated(props) {
         const message = "Tab updated";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventTabActivated(props) {
         const message = "Tab activated";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventTabRemoved(props) {
         const message = "Tab removed"
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventTabDetached(props = {}) {
         const message = "Tab detached";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventTabAttached(props = {}) {
         const message = "Tab attached";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventTabReplaced(props = {}) {
         const message = "Tab replaced";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventWindowFocusChanged(props = {}) {
         const message = "Window focus changed";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventWindowRemoved(props = {}) {
         const message = "Window removed";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
     static async logEventSuspend(props = {}) {
         const message = "System suspend";
-        const data = await this.get() || [];
-        await this.save(data, { timestamp: Date.now(), message, ...props });
+        await this.save({ timestamp: Date.now(), message, ...props });
     }
 }
 
+class Writer {
+    static storageKey = 'raw';
+}
+
+
+
 class Storage {
     static storageKey = 'raw';
-    // URL should be TLD
-    static async getRaw() {
-        const data = await chrome.storage.local.get([this.storageKey]);
-        return data[this.storageKey] || {};
+    static saveLock = Promise.resolve();
+
+    // ========== READ METHODS (Alphabetical) ==========
+
+    static async findActiveSessionId(url, windowId, tabId) {
+        if (!Aux.isEligibleUrl(url)) { return null; }
+        const raw = await this.getRaw();
+        if (!raw[url]) {
+            return null;
+        }
+        const sessions = raw[url];
+        // for a 100+ tabs might get slow; please conder alternate means
+        for (const sessionId in sessions) {
+            const session = sessions[sessionId];
+            // handling if windows ID or tab ID getting reused
+            if (session.windowId === windowId && session.tabId === tabId && !session.end) {
+                return sessionId;
+            }
+        }
+        return null;
     }
+
+    static async generateBlockDayData(url) {
+        // Set startDay to the start of this week (Sunday), endDay to the start of next week
+        const [start, end] = Aux.currentStartAndEndWeek(new Date())
+        const raw = await this.getRaw();
+        const weekData = [];
+        for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+            const dayStart = start + dayOffset * 86400000;
+            const dayEnd = dayStart + 86400000 - 1;
+            let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: 0 }));
+            if (raw[url]) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (session.focus) {
+                        for (const focusId in session.focus) {
+                            const focus = session.focus[focusId];
+                            if (focus.total && focus.start >= dayStart && focus.start <= dayEnd) {
+                                const focusStart = new Date(focus.start);
+                                const hour = focusStart.getHours();
+                                hourData[hour].strength += focus.total / 3600000; // convert to hours for strength
+                            }
+                        }
+                    }
+                }
+            }
+            weekData.push(hourData);
+        }
+        return weekData;
+    }
+
+    static async generateBlockHourData(url) {
+        // Set startDay to the start of today (midnight), endDay to the start of tomorrow
+        const now = new Date();
+        const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+        const endDay = startDay + 24 * 60 * 60 * 1000; // 24 hours in ms
+
+        const raw = await this.getRaw();
+        let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: "" }));
+        if (!raw[url]) {
+            return hourData; // No data for this URL
+        }
+
+        const sessions = raw[url];
+        for (const sessionId in sessions) {
+            const session = sessions[sessionId];
+            if (session.focus) {
+                for (const focusId in session.focus) {
+                    const focus = session.focus[focusId];
+                    if (focus.total && focus.start >= startDay && focus.start < endDay) {
+                        const focusStart = new Date(focus.start);
+                        const focdiv = Aux.focusDivision(focusStart, focus.total)
+                        console.log(`${url}-${new Date(focus.start).toLocaleString()}-${new Date(focus.end).toLocaleString()}:`, focdiv);
+                        for (let h = 0; h < 24; h++) {
+                            hourData[h].strength += focdiv[h] 
+                        }
+                    }
+                }
+            }
+        }
+        return hourData;
+    }
+
     static async getAverageFocus(start, end) {
         const raw = await this.getRaw();
         let focusSum = 0;
@@ -277,45 +351,6 @@ class Storage {
         }
         return focusCount === 0 ? 0 : (focusSum / focusCount);
     }
-    static async getMostVisitedURLs(start, end, limit = 1) {
-        const raw = await this.getRaw();
-        let visitCounts = {};
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.start >= start && session.start <= end) {
-                    if (!visitCounts[url]) {
-                        visitCounts[url] = 0;
-                    }
-                    visitCounts[url] += 1;
-                }
-            }
-        }
-        const sortedVisits = Object.entries(visitCounts).sort((a, b) => b[1] - a[1]);
-        return sortedVisits.slice(0, limit).map(entry => ({ url: entry[0], count: entry[1] }));
-    }
-    static async totalSitesVisited(start, end) {
-        const raw = await this.getRaw();
-        let siteCount = 0;
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.start >= start && session.start <= end) {
-                    siteCount += 1;
-                    break; // Count each URL only once
-                }
-            }
-        }
-        return siteCount;
-    }
-    static async getListMostVisitedURLs(start, end, limit = 5) {
-        const sorted = await this.getMostVisitedURLs(start, end, limit);
-        return sorted.map(entry => entry.url);
-    }
-
-
 
     static async getFocusSum(start, end) {
         const raw = await this.getRaw();
@@ -360,86 +395,117 @@ class Storage {
         return focusByURL;
     }
 
-    static async saveRaw(raw) {
-        await chrome.storage.local.set({ [this.storageKey]: raw });
+    static async getListMostVisitedURLs(start, end, limit = 5) {
+        const sorted = await this.getMostVisitedURLs(start, end, limit);
+        return sorted.map(entry => entry.url);
     }
 
-    static async findActiveSessionId(url, windowId, tabId) {
-        if (!Aux.isEligibleUrl(url)) { return null; }
+    static async getMostVisitedURLs(start, end, limit = 1) {
         const raw = await this.getRaw();
-        if (!raw[url]) {
-            return null;
-        }
-        const sessions = raw[url];
-        // for a 100+ tabs might get slow; please conder alternate means
-        for (const sessionId in sessions) {
-            const session = sessions[sessionId];
-            // handling if windows ID or tab ID getting reused
-            if (session.windowId === windowId && session.tabId === tabId && !session.end) {
-                return sessionId;
+        let visitCounts = {};
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.start >= start && session.start <= end) {
+                    if (!visitCounts[url]) {
+                        visitCounts[url] = 0;
+                    }
+                    visitCounts[url] += 1;
+                }
             }
         }
-        return null;
-    }
-    
-    static async insertSession(url, tabId, windowId, reason="") {
-        if (!Aux.isEligibleUrl(url)) {
-            return;
-        }
-        const sessionId = Aux.generateId();
-        const raw = await this.getRaw();
-        if (!raw[url]) {
-            raw[url] = {};
-        }
-        raw[url][sessionId] = {
-            start: Date.now(),
-            tabId: tabId,
-            windowId: windowId,
-            reason
-        };
-        await this.saveRaw(raw);
+        const sortedVisits = Object.entries(visitCounts).sort((a, b) => b[1] - a[1]);
+        return sortedVisits.slice(0, limit).map(entry => ({ url: entry[0], count: entry[1] }));
     }
 
-    static async insertFocus(url, sessionId, reason="") {
-        // A focus might get triggered when seeing chrome settings and such
-        if (!Aux.isEligibleUrl(url)) return;
-        const focusId = Aux.generateId();
-        const raw = await this.getRaw();
-        if (!raw[url] || Object.keys(raw[url]).length === 0) {
-            return; // should not happen but handled as not recorded
-        }
-        const sessions = raw[url];
-        const selected = sessions[sessionId];
-        if (!selected) {
-            return; // session doesn't exist
-        }
-        if (!selected.focus) {
-            selected.focus = {};
-        }
-        selected.focus[focusId] = {
-            start: Date.now(),
-            reason: reason
-        };
-        await this.saveRaw(raw);
+    static async getRaw() {
+        const data = await chrome.storage.local.get([this.storageKey]);
+        return data[this.storageKey] || {};
     }
 
-    static async endURLSession(url, sessionId, reason="") {
-        if (!Aux.isEligibleUrl(url)) {
-            return;
-        }
+    static async totalSitesVisited(start, end) {
         const raw = await this.getRaw();
-        if (!raw[url] || Object.keys(raw[url]).length === 0) {
-            return; // should not happen but handled as not recorded
+        let siteCount = 0;
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.start >= start && session.start <= end) {
+                    siteCount += 1;
+                    break; // Count each URL only once
+                }
+            }
         }
-        const sessions = raw[url];
-        const currentSession = sessions[sessionId];
-        if (!currentSession || currentSession.end) {
-            return; // session doesn't exist or already ended
+        return siteCount;
+    }
+
+    // ========== WRITE METHODS (Alphabetical) ==========
+
+    static async endAllActiveSessions(reason="") {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (!session.end) {
+                    await this.endFocus(url, sessionId, reason);
+                    await this.endURLSession(url, sessionId, reason);
+                }
+            }
         }
-        currentSession.end = Date.now();
-        currentSession.total = currentSession.end - currentSession.start;
-        currentSession.endReason = reason
-        await this.saveRaw(raw);
+    }
+
+    static async endAllFocusGlobally(reason) {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (!session.end && session.focus) {
+                    const hasFocus = Object.values(session.focus).some(f => !f.end);
+                    if (hasFocus) {
+                        await this.endFocus(url, sessionId, reason);
+                    }
+                }
+            }
+        }
+    }
+
+    static async endAllFocusInWindow(windowId, exceptTabId = null) {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === windowId && session.tabId !== exceptTabId && !session.end) {
+                    if (session.focus) {
+                        const hasFocus = Object.values(session.focus).some(f => !f.end);
+                        if (hasFocus) {
+                            await this.endFocus(url, sessionId);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    static async endAllSessionsInWindow(windowId, reason="") {
+        const raw = await this.getRaw();
+        
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === windowId && !session.end) {
+                    await this.endFocus(url, sessionId, reason);
+                    await this.endURLSession(url, sessionId, reason);
+                }
+            }
+        }
     }
 
     static async endFocus(url, sessionId, reason) {
@@ -491,94 +557,6 @@ class Storage {
         }
     }
 
-    // Helper method: Find and end session by tabId and windowId
-    static async findAndEndSession(tabId, windowId, reason="") {
-        const raw = await this.getRaw();
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === windowId && session.tabId === tabId && !session.end) {
-                    await this.endFocus(url, sessionId, reason);
-                    await this.endURLSession(url, sessionId, reason);
-                    return true; // Found and ended
-                }
-            }
-        }
-        return false; // Not found
-    }
-
-    // Helper method: End all focus in a specific window (except one tab)
-    static async endAllFocusInWindow(windowId, exceptTabId = null) {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === windowId && session.tabId !== exceptTabId && !session.end) {
-                    if (session.focus) {
-                        const hasFocus = Object.values(session.focus).some(f => !f.end);
-                        if (hasFocus) {
-                            await this.endFocus(url, sessionId);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Helper method: End all focus globally (across all windows)
-    static async endAllFocusGlobally(reason) {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (!session.end && session.focus) {
-                    const hasFocus = Object.values(session.focus).some(f => !f.end);
-                    if (hasFocus) {
-                        await this.endFocus(url, sessionId, reason);
-                    }
-                }
-            }
-        }
-    }
-
-    // Helper method: End all active sessions in a specific window
-    static async endAllSessionsInWindow(windowId, reason="") {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === windowId && !session.end) {
-                    await this.endFocus(url, sessionId, reason);
-                    await this.endURLSession(url, sessionId, reason);
-                }
-            }
-        }
-    }
-
-    // Helper method: End all active sessions globally
-    static async endAllActiveSessions(reason="") {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (!session.end) {
-                    await this.endFocus(url, sessionId, reason);
-                    await this.endURLSession(url, sessionId, reason);
-                }
-            }
-        }
-    }
-
-    // Helper method: End focus in all windows except one
     static async endFocusInOtherWindows(windowId, reason="") {
         const raw = await this.getRaw();
         
@@ -596,66 +574,87 @@ class Storage {
         }
     }
 
-    static async generateBlockHourData(url) {
-        // Set startDay to the start of today (midnight), endDay to the start of tomorrow
-        const now = new Date();
-        const startDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-        const endDay = startDay + 24 * 60 * 60 * 1000; // 24 hours in ms
-
+    static async endURLSession(url, sessionId, reason="") {
+        if (!Aux.isEligibleUrl(url)) {
+            return;
+        }
         const raw = await this.getRaw();
-        let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: "" }));
-        if (!raw[url]) {
-            return hourData; // No data for this URL
+        if (!raw[url] || Object.keys(raw[url]).length === 0) {
+            return; // should not happen but handled as not recorded
         }
-
         const sessions = raw[url];
-        for (const sessionId in sessions) {
-            const session = sessions[sessionId];
-            if (session.focus) {
-                for (const focusId in session.focus) {
-                    const focus = session.focus[focusId];
-                    if (focus.total && focus.start >= startDay && focus.start < endDay) {
-                        const focusStart = new Date(focus.start);
-                        const focdiv = Aux.focusDivision(focusStart, focus.total)
-                        console.log(`${url}-${new Date(focus.start).toLocaleString()}-${new Date(focus.end).toLocaleString()}:`, focdiv);
-                        for (let h = 0; h < 24; h++) {
-                            hourData[h].strength += focdiv[h] 
-                        }
-                    }
-                }
-            }
+        const currentSession = sessions[sessionId];
+        if (!currentSession || currentSession.end) {
+            return; // session doesn't exist or already ended
         }
-        return hourData;
+        currentSession.end = Date.now();
+        currentSession.total = currentSession.end - currentSession.start;
+        currentSession.endReason = reason
+        await this.saveRaw(raw);
     }
 
-    static async generateBlockDayData(url) {
-        // Set startDay to the start of this week (Sunday), endDay to the start of next week
-        const [start, end] = Aux.currentStartAndEndWeek(new Date())
+    static async findAndEndSession(tabId, windowId, reason="") {
         const raw = await this.getRaw();
-        const weekData = [];
-        for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-            const dayStart = start + dayOffset * 86400000;
-            const dayEnd = dayStart + 86400000 - 1;
-            let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: 0 }));
-            if (raw[url]) {
-                const sessions = raw[url];
-                for (const sessionId in sessions) {
-                    const session = sessions[sessionId];
-                    if (session.focus) {
-                        for (const focusId in session.focus) {
-                            const focus = session.focus[focusId];
-                            if (focus.total && focus.start >= dayStart && focus.start <= dayEnd) {
-                                const focusStart = new Date(focus.start);
-                                const hour = focusStart.getHours();
-                                hourData[hour].strength += focus.total / 3600000; // convert to hours for strength
-                            }
-                        }
-                    }
+        for (const url in raw) {
+            const sessions = raw[url];
+            for (const sessionId in sessions) {
+                const session = sessions[sessionId];
+                if (session.windowId === windowId && session.tabId === tabId && !session.end) {
+                    await this.endFocus(url, sessionId, reason);
+                    await this.endURLSession(url, sessionId, reason);
+                    return true; // Found and ended
                 }
             }
-            weekData.push(hourData);
         }
-        return weekData;
+        return false; // Not found
+    }
+
+    static async insertFocus(url, sessionId, reason="") {
+        // A focus might get triggered when seeing chrome settings and such
+        if (!Aux.isEligibleUrl(url)) return;
+        const focusId = Aux.generateId();
+        const raw = await this.getRaw();
+        if (!raw[url] || Object.keys(raw[url]).length === 0) {
+            return; // should not happen but handled as not recorded
+        }
+        const sessions = raw[url];
+        const selected = sessions[sessionId];
+        if (!selected) {
+            return; // session doesn't exist
+        }
+        if (!selected.focus) {
+            selected.focus = {};
+        }
+        selected.focus[focusId] = {
+            start: Date.now(),
+            reason: reason
+        };
+        await this.saveRaw(raw);
+    }
+
+    static async insertSession(url, tabId, windowId, reason="") {
+        if (!Aux.isEligibleUrl(url)) {
+            return;
+        }
+        const sessionId = Aux.generateId();
+        const raw = await this.getRaw();
+        if (!raw[url]) {
+            raw[url] = {};
+        }
+        raw[url][sessionId] = {
+            start: Date.now(),
+            tabId: tabId,
+            windowId: windowId,
+            reason
+        };
+        await this.saveRaw(raw);
+    }
+
+    static async saveRaw(raw) {
+        this.saveLock = this.saveLock.then(async () => {
+            await chrome.storage.local.set({ [this.storageKey]: raw });
+        });
+        return this.saveLock;
     }
 }
 
