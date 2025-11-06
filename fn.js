@@ -443,218 +443,257 @@ class Storage {
     // ========== WRITE METHODS (Alphabetical) ==========
 
     static async endAllActiveSessions(reason="") {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (!session.end) {
-                    await this.endFocus(url, sessionId, reason);
-                    await this.endURLSession(url, sessionId, reason);
-                }
-            }
-        }
-    }
-
-    static async endAllFocusGlobally(reason) {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (!session.end && session.focus) {
-                    const hasFocus = Object.values(session.focus).some(f => !f.end);
-                    if (hasFocus) {
-                        await this.endFocus(url, sessionId, reason);
+        const wl = this.writeLock(async raw => {
+            const collect = [];
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (!session.end) {
+                        collect.push(this.endFocusModifier(url, sessionId, reason));
+                        collect.push(this.endURLSessionModifier(url, sessionId, reason));
                     }
                 }
             }
-        }
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw;
+        });
+        await wl();
     }
 
-    static async endAllFocusInWindow(windowId, exceptTabId = null) {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === windowId && session.tabId !== exceptTabId && !session.end) {
-                    if (session.focus) {
+    static async endAllFocusGlobally(reason) {
+        const wl = this.writeLock(async raw => {
+            const collect = [];
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (!session.end && session.focus) {
                         const hasFocus = Object.values(session.focus).some(f => !f.end);
                         if (hasFocus) {
-                            await this.endFocus(url, sessionId);
+                            collect.push(this.endFocusModifier(url, sessionId, reason));
                         }
                     }
                 }
             }
-        }
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw;
+        });
+        await wl();
+    }
+
+    static async endAllFocusInWindow(windowId, exceptTabId = null) {
+        const wl = this.writeLock(async raw => {
+            const collect = [];
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (session.windowId === windowId && session.tabId !== exceptTabId && !session.end) {
+                        if (session.focus) {
+                            const hasFocus = Object.values(session.focus).some(f => !f.end);
+                            if (hasFocus) {
+                                collect.push(this.endFocusModifier(url, sessionId, ""));
+                            }
+                        }
+                    }
+                }
+            }
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw;
+        });
+        await wl();
     }
 
     static async endAllSessionsInWindow(windowId, reason="") {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === windowId && !session.end) {
-                    await this.endFocus(url, sessionId, reason);
-                    await this.endURLSession(url, sessionId, reason);
+        const wl = this.writeLock(async raw => {
+            const collect = [];
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (session.windowId === windowId && !session.end) {
+                        collect.push(this.endFocusModifier(url, sessionId, reason));
+                        collect.push(this.endURLSessionModifier(url, sessionId, reason));
+                    }
                 }
             }
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw;
+        });
+        await wl();
+    }
+
+    static async endFocusModifier(url, sessionId, reason) {
+        return (raw) => {
+            if (!raw[url] || Object.keys(raw[url]).length === 0) return; 
+            const sessions = raw[url];
+            const currentSession = sessions[sessionId];
+            if (!currentSession) return; 
+            const currentFocus = Object.values(currentSession.focus || {}).find(focus => !focus.end);
+            if (!currentFocus) return; 
+            const now = Date.now();
+            currentFocus.end = now;
+            currentFocus.total = currentFocus.end - currentFocus.start;
+            currentFocus.endReason = reason
+            return raw
         }
     }
 
     static async endFocus(url, sessionId, reason) {
-        if (!Aux.isEligibleUrl(url)) {
-            return;
-        }
-        const raw = await this.getRaw();
-        if (!raw[url] || Object.keys(raw[url]).length === 0) {
-            return; // should not happen but handled as not recorded
-        }
-        const sessions = raw[url];
-        const currentSession = sessions[sessionId];
-        if (!currentSession) {
-            return; // session doesn't exist
-        }
-        // find the one that does not have end. if all goes well, it should be one
-        const currentFocus = Object.values(currentSession.focus || {}).find(focus => !focus.end);
-        if (!currentFocus) {
-            return; // no active focus to end
-        }
-        const now = Date.now();
-        currentFocus.end = now;
-        currentFocus.total = currentFocus.end - currentFocus.start;
-        currentFocus.endReason = reason
-        await this.saveRaw(raw);
+        if (!Aux.isEligibleUrl(url)) return; 
+        const wl = this.writeLock(this.endFocusModifier(url, sessionId, reason))
+        await wl()
     }
 
     static async endFocusAllExcept(windowId, selectedTabId, reason="") {
         // Instead of querying all tabs, we iterate through storage to find active focus sessions
         // This is more efficient and works even when tabs are being closed
-        const raw = await this.getRaw();
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                // End focus for any session that:
-                // 1. Is in the same window
-                // 2. Is NOT the selected tab
-                // 3. Has an active focus (has focus object with at least one entry without end)
-                if (session.windowId === windowId && session.tabId !== selectedTabId && !session.end) {
-                    if (session.focus) {
-                        const hasFocus = Object.values(session.focus).some(f => !f.end);
-                        if (hasFocus) {
-                            await this.endFocus(url, sessionId, reason);
+        const wl = this.writeLock(async raw => {
+            const collect = [];
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    // End focus for any session that:
+                    // 1. Is in the same window
+                    // 2. Is NOT the selected tab
+                    // 3. Has an active focus (has focus object with at least one entry without end)
+                    if (session.windowId === windowId && session.tabId !== selectedTabId && !session.end) {
+                        if (session.focus) {
+                            const hasFocus = Object.values(session.focus).some(f => !f.end);
+                            if (hasFocus) {
+                                collect.push(this.endFocusModifier(url, sessionId, reason));
+                            }
                         }
                     }
                 }
             }
-        }
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw;
+        });
+        await wl();
     }
 
     static async endFocusInOtherWindows(windowId, reason="") {
-        const raw = await this.getRaw();
-        
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId !== windowId && !session.end && session.focus) {
-                    const hasFocus = Object.values(session.focus).some(f => !f.end);
-                    if (hasFocus) {
-                        await this.endFocus(url, sessionId, reason);
+        const wl = this.writeLock(async raw => {
+            const collect = []
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (session.windowId !== windowId && !session.end && session.focus) {
+                        const hasFocus = Object.values(session.focus).some(f => !f.end);
+                        if (hasFocus) {
+                            collect.push(this.endFocusModifier(url, sessionId, reason));
+                        }
                     }
                 }
             }
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw
+        })
+        await wl()
+    }
+
+    static async endURLSessionModifier(url, sessionId, reason="") {
+        return (raw) => {
+            if (!raw[url] || Object.keys(raw[url]).length === 0) return;
+            const sessions = raw[url];
+            const currentSession = sessions[sessionId];
+            if (!currentSession || currentSession.end) return;
+            currentSession.end = Date.now();
+            currentSession.total = currentSession.end - currentSession.start;
+            currentSession.endReason = reason
+            return raw
         }
     }
 
     static async endURLSession(url, sessionId, reason="") {
-        if (!Aux.isEligibleUrl(url)) {
-            return;
-        }
-        const raw = await this.getRaw();
-        if (!raw[url] || Object.keys(raw[url]).length === 0) {
-            return; // should not happen but handled as not recorded
-        }
-        const sessions = raw[url];
-        const currentSession = sessions[sessionId];
-        if (!currentSession || currentSession.end) {
-            return; // session doesn't exist or already ended
-        }
-        currentSession.end = Date.now();
-        currentSession.total = currentSession.end - currentSession.start;
-        currentSession.endReason = reason
-        await this.saveRaw(raw);
+        if (!Aux.isEligibleUrl(url)) return; 
+        const wl = this.writeLock(this.endURLSessionModifier(url, sessionId, reason))
+        await wl()
     }
 
     static async findAndEndSession(tabId, windowId, reason="") {
-        const raw = await this.getRaw();
-        for (const url in raw) {
-            const sessions = raw[url];
-            for (const sessionId in sessions) {
-                const session = sessions[sessionId];
-                if (session.windowId === windowId && session.tabId === tabId && !session.end) {
-                    await this.endFocus(url, sessionId, reason);
-                    await this.endURLSession(url, sessionId, reason);
-                    return true; // Found and ended
+        const wl = this.writeLock(async raw => {
+            const collect = []
+            for (const url in raw) {
+                const sessions = raw[url];
+                for (const sessionId in sessions) {
+                    const session = sessions[sessionId];
+                    if (session.windowId === windowId && session.tabId === tabId && !session.end) {
+                        collect.push(this.endFocusModifier(url, sessionId, reason));
+                        collect.push(this.endURLSessionModifier(url, sessionId, reason));
+                    }
                 }
             }
-        }
-        return false; // Not found
+            for (const c of collect) {
+                raw = await c(raw);
+            }
+            return raw
+        });
+        await wl();
     }
 
     static async insertFocus(url, sessionId, reason="") {
         // A focus might get triggered when seeing chrome settings and such
         if (!Aux.isEligibleUrl(url)) return;
         const focusId = Aux.generateId();
-        const raw = await this.getRaw();
-        if (!raw[url] || Object.keys(raw[url]).length === 0) {
-            return; // should not happen but handled as not recorded
-        }
-        const sessions = raw[url];
-        const selected = sessions[sessionId];
-        if (!selected) {
-            return; // session doesn't exist
-        }
-        if (!selected.focus) {
-            selected.focus = {};
-        }
-        selected.focus[focusId] = {
-            start: Date.now(),
-            reason: reason
-        };
-        await this.saveRaw(raw);
+        const wl = this.writeLock(async raw => {
+            if (!raw[url] || Object.keys(raw[url]).length === 0) {
+                return; // should not happen but handled as not recorded
+            }
+            const sessions = raw[url];
+            const selected = sessions[sessionId];
+            if (!selected) return;
+            if (!selected.focus) selected.focus = {};
+            selected.focus[focusId] = {
+                start: Date.now(),
+                reason: reason
+            };
+            return raw
+        })
+        await wl()
     }
 
     static async insertSession(url, tabId, windowId, reason="") {
-        if (!Aux.isEligibleUrl(url)) {
-            return;
-        }
+        if (!Aux.isEligibleUrl(url)) return;
         const sessionId = Aux.generateId();
-        const raw = await this.getRaw();
-        if (!raw[url]) {
-            raw[url] = {};
-        }
-        raw[url][sessionId] = {
-            start: Date.now(),
-            tabId: tabId,
-            windowId: windowId,
-            reason
-        };
-        await this.saveRaw(raw);
+        const wl = this.writeLock(raw => {
+            if (!raw[url]) raw[url] = {};
+            raw[url][sessionId] = {
+                start: Date.now(),
+                tabId: tabId,
+                windowId: windowId,
+                reason
+            };
+            return raw
+        })
+        await wl()
     }
 
-    static async saveRaw(raw) {
-        this.saveLock = this.saveLock.then(async () => {
-            await chrome.storage.local.set({ [this.storageKey]: raw });
-        });
-        return this.saveLock;
+    static writeLock(mod) {
+        return () => {
+            this.saveLock = this.saveLock.then(async () => {
+                const raw = await this.getRaw()
+                const modifiedRaw = await mod(raw)
+                await chrome.storage.local.set({ [this.storageKey]: modifiedRaw });
+            })
+            return this.saveLock;
+        }
     }
 }
 
