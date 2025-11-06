@@ -82,28 +82,32 @@ async function displayTodayActivity(totalFocus, totalFocusByURL) {
     const activityItem = document.createElement('div');
     activityItem.className = 'activity-item';
     
-    // Create header with doain and time
-    const activityHeader = document.createElement('div');
-    activityHeader.className = 'activity-header';
-    activityHeader.innerHTML = `
-      <div class="activity-domain">${domain}</div>
-      <div class="activity-time">${formatTime(timeSpent)}</div>
-    `;
+    // Create domain name element
+    const domainElement = document.createElement('div');
+    domainElement.className = 'activity-domain';
+    domainElement.textContent = domain;
+    domainElement.title = domain; // Show full domain on hover
     
-    activityItem.appendChild(activityHeader);
+    // Create time element
+    const timeElement = document.createElement('div');
+    timeElement.className = 'activity-time';
+    timeElement.textContent = formatTime(timeSpent);
     
-    // Generate and add block hour diagram
+    // Generate block hour diagram
     const hourData = await Storage.generateBlockHourData(domain);
     const blockDiagram = BlockHourDiagram.create(hourData, {
-      height: '40px',
+      height: '100%',
+      width: '100%',
       baseColor: '#4A90E2',
       textColor: '#fff',
       borderColor: '#e0e0e0'
     });
     
-    // Add some spacing
-    blockDiagram.style.marginTop = '8px';
+    // Append all elements to activity item (grid layout)
+    activityItem.appendChild(domainElement);
     activityItem.appendChild(blockDiagram);
+    activityItem.appendChild(timeElement);
+    
     activityItems.appendChild(activityItem);
   }
 }

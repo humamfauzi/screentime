@@ -713,7 +713,7 @@ class BlockHourDiagram {
 
         const defaults = {
             width: '100%',
-            height: '60px',
+            height: '30px',
             baseColor: '#4A90E2',
             textColor: '#333',
             borderColor: '#ddd',
@@ -776,7 +776,7 @@ class BlockHourDiagram {
             });
 
             // Add tooltip
-            block.title = `Hour ${i}:00 - Value: ${displayNumber}`;
+            block.title = `Hour ${i}:00 - Value: ${displayNumber}s`;
 
             // Add number display
             const numberSpan = document.createElement('span');
