@@ -92,15 +92,28 @@ class Aux {
         let currentDay = start.getDay(); // 0 (Sun) to 6 (Sat)
         const divisions = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)); // seconds per day/hour
         let unixStart = start.getTime();
-        while (remaining > 0 && currentDay < 7) {
-            const nextUnixHour = new Date(start.getFullYear(), start.getMonth(), start.getDate() + currentDay, currentHour + 1).getTime();
+        
+        // Calculate offset in days from the start date
+        let dayOffset = 0;
+        
+        while (remaining > 0 && (currentDay + dayOffset) < 7) {
+            const actualDay = (currentDay + dayOffset) % 7;
+            const nextUnixHour = new Date(
+                start.getFullYear(), 
+                start.getMonth(), 
+                start.getDate() + dayOffset, 
+                currentHour + 1
+            ).getTime();
             const secondsToNextHour = Math.ceil((nextUnixHour - unixStart) / 1000);
-            divisions[currentDay][currentHour] += Math.min(secondsToNextHour, remaining);
-            remaining -= secondsToNextHour;
+            const secondsToAdd = Math.min(secondsToNextHour, remaining);
+            
+            divisions[actualDay][currentHour] += secondsToAdd;
+            remaining -= secondsToAdd;
             currentHour++;
+            
             if (currentHour >= 24) {
                 currentHour = 0;
-                currentDay++;
+                dayOffset++;
             }
             unixStart = nextUnixHour;
         }
@@ -293,7 +306,7 @@ class Storage {
         // Set startDay to the start of this week (Sunday), endDay to the start of next week
         const [start, end] = Aux.currentStartAndEndWeek(new Date())
         const raw = await this.getRaw();
-        const weekData = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ strength: 0, number: 0 })));
+        const weekData = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
         for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
             if (raw[url]) {
                 const sessions = raw[url];
@@ -340,7 +353,7 @@ class Storage {
                     if (focus.total && focus.start >= startDay && focus.start < endDay) {
                         const focusStart = new Date(focus.start);
                         const focdiv = Aux.focusDivision(focusStart, focus.total)
-                        for (let h = 0; h < 7; h++) {
+                        for (let h = 0; h < 24; h++) {
                             hourData[h].strength += focdiv[h] 
                         }
                     }
@@ -1052,11 +1065,11 @@ class BlockDayDiagram {
                 });
 
                 // Add tooltip
-                block.title = `${dayLabels[day]} ${hour}:00 - Value: ${displayNumber}`;
+                block.title = `${dayLabels[day]} ${hour}:00 - Value: ${displayNumber}s`;
 
                 // Add number display
                 const numberSpan = document.createElement('span');
-                numberSpan.textContent = displayNumber;
+                numberSpan.textContent = "";
                 block.appendChild(numberSpan);
 
                 blocksContainer.appendChild(block);

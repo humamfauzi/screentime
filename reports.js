@@ -155,7 +155,7 @@ async function displayDailyBreakdown(startTimestamp, endTimestamp) {
   // Create the block day diagram
   const diagram = BlockDayDiagram.create(weekData, {
     width: '100%',
-    blockHeight: '50px',
+    blockHeight: '18px',
     baseColor: '#4A90E2'
   });
   
