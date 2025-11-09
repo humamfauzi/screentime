@@ -160,7 +160,7 @@ body {
   display: grid;
   grid-template-columns: 120px 440px auto;
   align-items: center;
-  gap: 15px;
+  gap: 5px;
   padding: 0;
 }
 
@@ -186,7 +186,7 @@ body {
   color: #667eea;
   font-weight: 600;
   font-size: 10px;
-  text-align: right;
+  text-align: left;
   padding-right: 5px;
 }
 
@@ -483,6 +483,54 @@ body {
 }
 
 /* Daily Breakdown */
+.breakdown-header {
+  margin-bottom: 20px;
+}
+
+.breakdown-controls {
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.breakdown-controls label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #4a5568;
+}
+
+.breakdown-controls select {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 14px;
+  background: white;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.breakdown-controls select:hover {
+  border-color: #cbd5e0;
+}
+
+.breakdown-controls select:focus {
+  outline: none;
+  border-color: #667eea;
+}
+
+.breakdown-header h4 {
+  font-size: 16px;
+  color: #2d3748;
+  margin-bottom: 5px;
+}
+
+.breakdown-subtitle {
+  font-size: 13px;
+  color: #718096;
+}
+
 .daily-item {
   padding: 15px;
   border-bottom: 1px solid #e2e8f0;

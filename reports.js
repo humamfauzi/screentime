@@ -53,7 +53,8 @@ async function displayReportSummary(startTimestamp, endTimestamp, days) {
   const totalSitesEl = document.getElementById('total-sites');
 
   // Average daily time
-  const totalFocusTime = await Storage.getFocusSum(startTimestamp, endTimestamp);
+  let totalFocusTime = await Storage.getFocusSum(startTimestamp, endTimestamp);
+  totalFocusTime = totalFocusTime / 1000;
   const avgTime = days > 0 ? totalFocusTime / days : 0;
   avgDailyTimeEl.textContent = formatTime(avgTime);
 
@@ -74,10 +75,13 @@ async function displayTopWebsites(startTimestamp, endTimestamp) {
   const topWebsitesEl = document.getElementById('top-websites');
   
   // Get focus time by URL and sort by focus time
-  const focusByURL = await Storage.getFocusSumByURL(startTimestamp, endTimestamp);
+  let focusByURL = await Storage.getFocusSumByURL(startTimestamp, endTimestamp);
+  for (const [url, item] of Object.entries(focusByURL)) {
+    focusByURL[url] = item / 1000; // convert to seconds
+  }
   const sortedSites = Object.entries(focusByURL)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 10); // Top 10
+    .slice(0, 5); // Top 10
 
   if (sortedSites.length === 0) {
     topWebsitesEl.innerHTML = `
@@ -126,11 +130,27 @@ async function displayDailyBreakdown(startTimestamp, endTimestamp) {
     return;
   }
 
-  const topUrl = sortedSites[0][0];
-  const topFocusTime = sortedSites[0][1];
+  // Create dropdown with all websites
+  const websiteOptions = sortedSites.map(([url, time], index) => {
+    return `<option value="${index}">${url} (${formatTime(time / 1000)})</option>`;
+  }).join('');
+
+  // Get the currently selected website index (default to first)
+  let selectedIndex = 0;
+  const existingSelect = dailyBreakdownEl.querySelector('#website-selector');
+  if (existingSelect) {
+    selectedIndex = parseInt(existingSelect.value) || 0;
+    // Make sure the index is still valid
+    if (selectedIndex >= sortedSites.length) {
+      selectedIndex = 0;
+    }
+  }
+
+  const selectedUrl = sortedSites[selectedIndex][0];
+  const selectedFocusTime = sortedSites[selectedIndex][1];
   
-  // Generate block day diagram data for the most focused website
-  const weekData = await Storage.generateBlockDayData(topUrl);
+  // Generate block day diagram data for the selected website
+  const weekData = await Storage.generateBlockDayData(selectedUrl);
   
   // Create the block day diagram
   const diagram = BlockDayDiagram.create(weekData, {
@@ -142,11 +162,29 @@ async function displayDailyBreakdown(startTimestamp, endTimestamp) {
   // Build the HTML
   dailyBreakdownEl.innerHTML = `
     <div class="breakdown-header">
-      <h4>Weekly Pattern: ${topUrl}</h4>
-      <p class="breakdown-subtitle">Total focus time: ${formatTime(topFocusTime)}</p>
+      <div class="breakdown-controls">
+        <label for="website-selector">Select website:</label>
+        <select id="website-selector">
+          ${websiteOptions}
+        </select>
+      </div>
+      <h4>Weekly Pattern: ${selectedUrl}</h4>
+      <p class="breakdown-subtitle">Total focus time: ${formatTime(selectedFocusTime / 1000)}</p>
     </div>
     <div id="block-diagram-container"></div>
   `;
+  
+  // Set the selected value
+  const websiteSelector = dailyBreakdownEl.querySelector('#website-selector');
+  websiteSelector.value = selectedIndex;
+  
+  // Add change event listener
+  websiteSelector.addEventListener('change', async () => {
+    const periodSelect = document.getElementById('report-period');
+    const days = parseInt(periodSelect.value);
+    const [startTimestamp, endTimestamp] = getPeriodBoundaries(days);
+    await displayDailyBreakdown(startTimestamp, endTimestamp);
+  });
   
   // Append the diagram
   const diagramContainer = dailyBreakdownEl.querySelector('#block-diagram-container');

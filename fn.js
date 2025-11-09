@@ -85,6 +85,27 @@ class Aux {
         }
         return divisions;
     }
+
+    static focusDivisionWeek(start, total) {
+        let remaining = Math.ceil(total / 1000); // convert ms to seconds
+        let currentHour = start.getHours();
+        let currentDay = start.getDay(); // 0 (Sun) to 6 (Sat)
+        const divisions = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)); // seconds per day/hour
+        let unixStart = start.getTime();
+        while (remaining > 0 && currentDay < 7) {
+            const nextUnixHour = new Date(start.getFullYear(), start.getMonth(), start.getDate() + currentDay, currentHour + 1).getTime();
+            const secondsToNextHour = Math.ceil((nextUnixHour - unixStart) / 1000);
+            divisions[currentDay][currentHour] += Math.min(secondsToNextHour, remaining);
+            remaining -= secondsToNextHour;
+            currentHour++;
+            if (currentHour >= 24) {
+                currentHour = 0;
+                currentDay++;
+            }
+            unixStart = nextUnixHour;
+        }
+        return divisions;
+    }
 }
 
 class ManualTest {
@@ -272,11 +293,8 @@ class Storage {
         // Set startDay to the start of this week (Sunday), endDay to the start of next week
         const [start, end] = Aux.currentStartAndEndWeek(new Date())
         const raw = await this.getRaw();
-        const weekData = [];
+        const weekData = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => ({ strength: 0, number: 0 })));
         for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-            const dayStart = start + dayOffset * 86400000;
-            const dayEnd = dayStart + 86400000 - 1;
-            let hourData = Array.from({ length: 24 }, () => ({ strength: 0, number: 0 }));
             if (raw[url]) {
                 const sessions = raw[url];
                 for (const sessionId in sessions) {
@@ -284,16 +302,19 @@ class Storage {
                     if (session.focus) {
                         for (const focusId in session.focus) {
                             const focus = session.focus[focusId];
-                            if (focus.total && focus.start >= dayStart && focus.start <= dayEnd) {
+                            if (focus.total && focus.start >= start && focus.start <= end) {
                                 const focusStart = new Date(focus.start);
-                                const hour = focusStart.getHours();
-                                hourData[hour].strength += focus.total / 3600000; // convert to hours for strength
+                                const focdiv = Aux.focusDivisionWeek(focusStart, focus.total)
+                                for (let d = 0; d < 7; d++) {
+                                    for (let hr = 0; hr < 24; hr++) {
+                                        weekData[d][hr] += focdiv[d][hr];
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
-            weekData.push(hourData);
         }
         return weekData;
     }
@@ -319,8 +340,7 @@ class Storage {
                     if (focus.total && focus.start >= startDay && focus.start < endDay) {
                         const focusStart = new Date(focus.start);
                         const focdiv = Aux.focusDivision(focusStart, focus.total)
-                        console.log(`${url}-${new Date(focus.start).toLocaleString()}-${new Date(focus.end).toLocaleString()}:`, focdiv);
-                        for (let h = 0; h < 24; h++) {
+                        for (let h = 0; h < 7; h++) {
                             hourData[h].strength += focdiv[h] 
                         }
                     }
@@ -363,7 +383,7 @@ class Storage {
                     for (const focusId in session.focus) {
                         const focus = session.focus[focusId];
                         if (focus.total && focus.start >= start && focus.start <= end) {
-                            focusSum += focus.total;
+                            focusSum += focus.total; // in ms
                         }
                     }
                 }

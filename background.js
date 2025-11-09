@@ -101,7 +101,40 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         return;
     }
     await Debug.logEventTabUpdated({tabId, changeInfo, tab});
-        
+    const prevSessionId = await Storage.findActiveSessionId(null, tab.windowId, tabId);
+    const newTld = Aux.getTLD(changeInfo.url);
+
+    // Only track eligible URLs
+    if (!Aux.isEligibleUrl(changeInfo.url)) {
+        // If previous session exists, end it due to ineligible URL
+        if (prevSessionId) {
+            await Storage.endSessionById(prevSessionId, ev.domainChanged);
+        }
+        return;
+    }
+
+    // If previous session exists, check if TLD changed
+    if (prevSessionId) {
+        const prevSession = await Storage.getSessionById(prevSessionId);
+        if (prevSession && prevSession.tld !== newTld) {
+            // End previous session due to TLD change
+            await Storage.endSessionById(prevSessionId, ev.domainChanged);
+            // Start new session for new TLD
+            await Storage.insertSession(newTld, tabId, tab.windowId, ev.domainChanged);
+        }
+    } else {
+        // No previous session, create new one
+        await Storage.insertSession(newTld, tabId, tab.windowId, ev.tabUpdated);
+    }
+
+    // If tab is active, handle focus
+    if (tab.active) {
+        const sessionId = await Storage.findActiveSessionId(newTld, tab.windowId, tabId);
+        if (sessionId) {
+            await Storage.endFocusAllExcept(tab.windowId, tabId, ev.tabDeactivated);
+            await Storage.insertFocus(newTld, sessionId, ev.tabUpdated);
+        }
+    }
 })
 
 // event when a tab is deactivated (loses focus)
