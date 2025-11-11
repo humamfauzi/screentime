@@ -19,6 +19,11 @@ let _ = {
 }
 
 class Aux {
+    /**
+     * Extracts the hostname (including subdomains) from a URL
+     * @param {string} url - The URL to extract the hostname from (e.g., "https://docs.google.com/page")
+     * @returns {string} The hostname including subdomains (e.g., "docs.google.com"), or the original URL if parsing fails
+     */
     static getTLD(url) {
         try {
             const urlObj = new URL(url);
@@ -30,6 +35,10 @@ class Aux {
         }
     }
 
+    /**
+     * Generates a random 6-character ID using uppercase letters and numbers
+     * @returns {string} A 6-character random ID (e.g., "A3B9X2")
+     */
     static generateId() {
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         let result = '';
@@ -39,6 +48,11 @@ class Aux {
         return result;
     }
 
+    /**
+     * Checks if a URL is eligible for tracking (filters out internal browser pages)
+     * @param {string} url - The URL to check
+     * @returns {boolean} True if the URL is eligible for tracking, false otherwise
+     */
     static isEligibleUrl(url) {
         if (!url) return false;
         const ineligibleSchemes = [
@@ -57,12 +71,22 @@ class Aux {
         return true;
     }
 
+    /**
+     * Gets the start and end timestamps (in milliseconds) for a given day
+     * @param {Date} time - The date object for which to get the day boundaries
+     * @returns {Array<number>} [startOfDay, endOfDay] - Array with two timestamps in milliseconds
+     */
     static currentStartAndEnd(time) {
         const startOfDay = new Date(time.getFullYear(), time.getMonth(), time.getDate()).getTime();
         const endOfDay = startOfDay + 86400000 - 1; // End of the day
         return [startOfDay, endOfDay];
     }
 
+    /**
+     * Gets the start and end timestamps (in milliseconds) for a given week (Sunday to Saturday)
+     * @param {Date} time - The date object for which to get the week boundaries
+     * @returns {Array<number>} [startOfWeek, endOfWeek] - Array with two timestamps in milliseconds
+     */
     static currentStartAndEndWeek(time) {
         const dayOfWeek = time.getDay(); // 0 (Sun) to 6 (Sat)
         const startOfWeek = new Date(time.getFullYear(), time.getMonth(), time.getDate() - dayOfWeek).getTime();
@@ -70,6 +94,12 @@ class Aux {
         return [startOfWeek, endOfWeek];
     }
 
+    /**
+     * Divides a focus session into 24 hourly segments (in seconds per hour)
+     * @param {Date} start - The start time of the focus session
+     * @param {number} total - Total duration in milliseconds
+     * @returns {Array<number>} Array of 24 numbers representing seconds spent in each hour (0-23)
+     */
     static focusDivision(start, total) {
         let remaining = Math.ceil(total / 1000); // convert ms to seconds
         let currentHour = start.getHours();
@@ -86,6 +116,12 @@ class Aux {
         return divisions;
     }
 
+    /**
+     * Divides a focus session into a weekly grid (7 days x 24 hours) in seconds
+     * @param {Date} start - The start time of the focus session
+     * @param {number} total - Total duration in milliseconds
+     * @returns {Array<Array<number>>} 7x24 array where [day][hour] represents seconds spent (day: 0=Sun to 6=Sat)
+     */
     static focusDivisionWeek(start, total) {
         let remaining = Math.ceil(total / 1000); // convert ms to seconds
         let currentHour = start.getHours();
@@ -122,12 +158,23 @@ class Aux {
 }
 
 class ManualTest {
+    /**
+     * Collects all focus sessions that occurred today
+     * @returns {Promise<Array<Object>>} Array of focus session objects with url, focus_id, timestamps, duration, and reasons
+     */
     static async collectFocusToday() {
         const dateObj = new Date();
         const startDayUnix = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()).getTime();
         const endDayUnix = startDayUnix + 86400000 - 1; // End of the day
         return ManualTest.collectFocus(startDayUnix, endDayUnix);
     }
+
+    /**
+     * Collects all focus sessions within a specified time range
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @returns {Promise<Array<Object>>} Array of focus session objects sorted by start time
+     */
     static async collectFocus(start, end) {
         const raw = await Storage.getRaw();
         const focus = []
@@ -156,6 +203,10 @@ class ManualTest {
         return focus;
     }
 
+    /**
+     * Retrieves all currently active (not ended) focus sessions
+     * @returns {Promise<Array<Object>>} Array of active focus session objects with url, focus_id, start timestamp, and reason
+     */
     static async activeFocus() {
         const raw = await Storage.getRaw();
         const focus = []
@@ -182,6 +233,10 @@ class ManualTest {
         return focus;
     }
 
+    /**
+     * Retrieves all currently active (not ended) URL sessions
+     * @returns {Promise<Array<Object>>} Array of active session objects with url, session_id, start timestamp, tabId, windowId, and reason
+     */
     static async activeSession() {
         const raw = await Storage.getRaw();
         const activeSessions = [];
@@ -210,10 +265,20 @@ class Debug {
     static storageKey = 'debug';
     static saveLock = Promise.resolve();
     
+    /**
+     * Retrieves all debug logs from storage
+     * @returns {Promise<Array<Object>|undefined>} Array of debug log entries or undefined if no logs exist
+     */
     static async get() {
         const data = await chrome.storage.local.get([this.storageKey]);
         return data[this.storageKey];
     }
+
+    /**
+     * Saves a debug log entry to storage
+     * @param {Object} obj - The log object to save
+     * @returns {Promise<void>}
+     */
     static async save(obj) {
         this.saveLock = this.saveLock.then(async () => {
             const data = await this.get() || [];
@@ -222,56 +287,129 @@ class Debug {
         })
         return this.saveLock;
     }
+
+    /**
+     * Logs the extension installation event
+     * @returns {Promise<void>}
+     */
     static async logEventInstalled() {
         const message = "Extension installed";
         await this.save({ timestamp: Date.now(), message });
     }
+
+    /**
+     * Logs the extension startup event
+     * @returns {Promise<void>}
+     */
     static async logEventStartup() {
         const message = "Extension started";
         await this.save({ timestamp: Date.now(), message });
     }
+
+    /**
+     * Logs a tab created event
+     * @param {Object} props - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabCreated(props) {
         const message = "Tab created";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a tab updated event
+     * @param {Object} props - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabUpdated(props) {
         const message = "Tab updated";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a tab activated event
+     * @param {Object} props - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabActivated(props) {
         const message = "Tab activated";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a tab removed event
+     * @param {Object} props - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabRemoved(props) {
         const message = "Tab removed"
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a tab detached event
+     * @param {Object} [props={}] - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabDetached(props = {}) {
         const message = "Tab detached";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a tab attached event
+     * @param {Object} [props={}] - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabAttached(props = {}) {
         const message = "Tab attached";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a tab replaced event
+     * @param {Object} [props={}] - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventTabReplaced(props = {}) {
         const message = "Tab replaced";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a window focus changed event
+     * @param {Object} [props={}] - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventWindowFocusChanged(props = {}) {
         const message = "Window focus changed";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a window removed event
+     * @param {Object} [props={}] - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventWindowRemoved(props = {}) {
         const message = "Window removed";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
+
+    /**
+     * Logs a system suspend event
+     * @param {Object} [props={}] - Additional properties to log with the event
+     * @returns {Promise<void>}
+     */
     static async logEventSuspend(props = {}) {
         const message = "System suspend";
         await this.save({ timestamp: Date.now(), message, ...props });
     }
 }
 
+/**
+ * Writer class - storage utility (placeholder)
+ */
 class Writer {
     static storageKey = 'raw';
 }
@@ -284,6 +422,13 @@ class Storage {
 
     // ========== READ METHODS (Alphabetical) ==========
 
+    /**
+     * Finds the active session ID for a specific tab in a window
+     * @param {string} url - The URL of the tab
+     * @param {number} windowId - The window ID
+     * @param {number} tabId - The tab ID
+     * @returns {Promise<string|null>} The session ID if found, null otherwise
+     */
     static async findActiveSessionId(url, windowId, tabId) {
         if (!Aux.isEligibleUrl(url)) { return null; }
         const raw = await this.getRaw();
@@ -302,6 +447,11 @@ class Storage {
         return null;
     }
 
+    /**
+     * Generates a 7-day x 24-hour grid of focus time data for a specific URL (current week)
+     * @param {string} url - The URL to generate data for
+     * @returns {Promise<Array<Array<number>>>} 7x24 array of seconds spent per day/hour (day: 0=Sun to 6=Sat)
+     */
     static async generateBlockDayData(url) {
         // Set startDay to the start of this week (Sunday), endDay to the start of next week
         const [start, end] = Aux.currentStartAndEndWeek(new Date())
@@ -331,6 +481,11 @@ class Storage {
         return weekData;
     }
 
+    /**
+     * Generates a 24-hour array of focus time data for a specific URL (today only)
+     * @param {string} url - The URL to generate data for
+     * @returns {Promise<Array<Object>>} Array of 24 objects with {strength, number} for each hour
+     */
     static async generateBlockHourData(url) {
         // Set startDay to the start of today (midnight), endDay to the start of tomorrow
         const now = new Date();
@@ -362,6 +517,12 @@ class Storage {
         return hourData;
     }
 
+    /**
+     * Calculates the average focus duration within a time range
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @returns {Promise<number>} Average focus duration in milliseconds, or 0 if no focus sessions
+     */
     static async getAverageFocus(start, end) {
         const raw = await this.getRaw();
         let focusSum = 0;
@@ -384,6 +545,12 @@ class Storage {
         return focusCount === 0 ? 0 : (focusSum / focusCount);
     }
 
+    /**
+     * Calculates the total focus time within a time range (all URLs combined)
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @returns {Promise<number>} Total focus time in milliseconds
+     */
     static async getFocusSum(start, end) {
         const raw = await this.getRaw();
         let focusSum = 0;
@@ -404,6 +571,12 @@ class Storage {
         return focusSum;
     }
 
+    /**
+     * Calculates the total focus time grouped by URL within a time range
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @returns {Promise<Object>} Object with URLs as keys and total focus time (in milliseconds) as values
+     */
     static async getFocusSumByURL(start, end) {
         const raw = await this.getRaw();
         let focusByURL = {};
@@ -427,11 +600,25 @@ class Storage {
         return focusByURL;
     }
 
+    /**
+     * Gets a list of the most visited URLs within a time range
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @param {number} [limit=5] - Maximum number of URLs to return
+     * @returns {Promise<Array<string>>} Array of URLs sorted by visit count (most visited first)
+     */
     static async getListMostVisitedURLs(start, end, limit = 5) {
         const sorted = await this.getMostVisitedURLs(start, end, limit);
         return sorted.map(entry => entry.url);
     }
 
+    /**
+     * Gets the most visited URLs with their visit counts within a time range
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @param {number} [limit=1] - Maximum number of results to return
+     * @returns {Promise<Array<Object>>} Array of {url, count} objects sorted by visit count (most visited first)
+     */
     static async getMostVisitedURLs(start, end, limit = 1) {
         const raw = await this.getRaw();
         let visitCounts = {};
@@ -451,11 +638,21 @@ class Storage {
         return sortedVisits.slice(0, limit).map(entry => ({ url: entry[0], count: entry[1] }));
     }
 
+    /**
+     * Retrieves all raw tracking data from storage
+     * @returns {Promise<Object>} The raw data object with URLs as keys and session data as values
+     */
     static async getRaw() {
         const data = await chrome.storage.local.get([this.storageKey]);
         return data[this.storageKey] || {};
     }
 
+    /**
+     * Counts the total number of unique sites visited within a time range
+     * @param {number} start - Start timestamp in milliseconds
+     * @param {number} end - End timestamp in milliseconds
+     * @returns {Promise<number>} The number of unique sites visited
+     */
     static async totalSitesVisited(start, end) {
         const raw = await this.getRaw();
         let siteCount = 0;
@@ -474,6 +671,11 @@ class Storage {
 
     // ========== WRITE METHODS (Alphabetical) ==========
 
+    /**
+     * Ends all active sessions globally (both focus and URL sessions)
+     * @param {string} [reason=""] - Reason for ending sessions
+     * @returns {Promise<void>}
+     */
     static async endAllActiveSessions(reason="") {
         const wl = this.writeLock(async raw => {
             const collect = [];
@@ -495,6 +697,11 @@ class Storage {
         await wl();
     }
 
+    /**
+     * Ends all active focus sessions globally (without ending URL sessions)
+     * @param {string} reason - Reason for ending focus sessions
+     * @returns {Promise<void>}
+     */
     static async endAllFocusGlobally(reason) {
         const wl = this.writeLock(async raw => {
             const collect = [];
@@ -518,6 +725,12 @@ class Storage {
         await wl();
     }
 
+    /**
+     * Ends all active focus sessions in a specific window, optionally excluding a specific tab
+     * @param {number} windowId - The window ID
+     * @param {number|null} [exceptTabId=null] - Tab ID to exclude from ending focus
+     * @returns {Promise<void>}
+     */
     static async endAllFocusInWindow(windowId, exceptTabId = null) {
         const wl = this.writeLock(async raw => {
             const collect = [];
@@ -543,6 +756,12 @@ class Storage {
         await wl();
     }
 
+    /**
+     * Ends all sessions (both focus and URL) in a specific window
+     * @param {number} windowId - The window ID
+     * @param {string} [reason=""] - Reason for ending sessions
+     * @returns {Promise<void>}
+     */
     static async endAllSessionsInWindow(windowId, reason="") {
         const wl = this.writeLock(async raw => {
             const collect = [];
@@ -564,6 +783,13 @@ class Storage {
         await wl();
     }
 
+    /**
+     * Creates a modifier function to end the current focus in a session
+     * @param {string} url - The URL of the session
+     * @param {string} sessionId - The session ID
+     * @param {string} reason - Reason for ending the focus
+     * @returns {Promise<Function>} A modifier function that takes raw data and returns modified raw data
+     */
     static async endFocusModifier(url, sessionId, reason) {
         return (raw) => {
             if (!raw[url] || Object.keys(raw[url]).length === 0) return; 
@@ -580,12 +806,26 @@ class Storage {
         }
     }
 
+    /**
+     * Ends the current focus session for a specific URL and session
+     * @param {string} url - The URL of the session
+     * @param {string} sessionId - The session ID
+     * @param {string} reason - Reason for ending the focus
+     * @returns {Promise<void>}
+     */
     static async endFocus(url, sessionId, reason) {
         if (!Aux.isEligibleUrl(url)) return; 
         const wl = this.writeLock(this.endFocusModifier(url, sessionId, reason))
         await wl()
     }
 
+    /**
+     * Ends focus for all tabs in a window except the specified tab
+     * @param {number} windowId - The window ID
+     * @param {number} selectedTabId - The tab ID to keep focus on
+     * @param {string} [reason=""] - Reason for ending focus
+     * @returns {Promise<void>}
+     */
     static async endFocusAllExcept(windowId, selectedTabId, reason="") {
         // Instead of querying all tabs, we iterate through storage to find active focus sessions
         // This is more efficient and works even when tabs are being closed
@@ -617,6 +857,12 @@ class Storage {
         await wl();
     }
 
+    /**
+     * Ends all focus sessions in windows other than the specified window
+     * @param {number} windowId - The window ID to keep focus active in
+     * @param {string} [reason=""] - Reason for ending focus
+     * @returns {Promise<void>}
+     */
     static async endFocusInOtherWindows(windowId, reason="") {
         const wl = this.writeLock(async raw => {
             const collect = []
@@ -640,6 +886,13 @@ class Storage {
         await wl()
     }
 
+    /**
+     * Creates a modifier function to end a URL session
+     * @param {string} url - The URL of the session
+     * @param {string} sessionId - The session ID
+     * @param {string} [reason=""] - Reason for ending the session
+     * @returns {Promise<Function>} A modifier function that takes raw data and returns modified raw data
+     */
     static async endURLSessionModifier(url, sessionId, reason="") {
         return (raw) => {
             if (!raw[url] || Object.keys(raw[url]).length === 0) return;
@@ -653,12 +906,26 @@ class Storage {
         }
     }
 
+    /**
+     * Ends a URL session for a specific URL and session ID
+     * @param {string} url - The URL of the session
+     * @param {string} sessionId - The session ID
+     * @param {string} [reason=""] - Reason for ending the session
+     * @returns {Promise<void>}
+     */
     static async endURLSession(url, sessionId, reason="") {
         if (!Aux.isEligibleUrl(url)) return; 
         const wl = this.writeLock(this.endURLSessionModifier(url, sessionId, reason))
         await wl()
     }
 
+    /**
+     * Finds and ends the session associated with a specific tab and window
+     * @param {number} tabId - The tab ID
+     * @param {number} windowId - The window ID
+     * @param {string} [reason=""] - Reason for ending the session
+     * @returns {Promise<void>}
+     */
     static async findAndEndSession(tabId, windowId, reason="") {
         const wl = this.writeLock(async raw => {
             const collect = []
@@ -680,6 +947,13 @@ class Storage {
         await wl();
     }
 
+    /**
+     * Inserts a new focus event into an existing session
+     * @param {string} url - The URL of the session
+     * @param {string} sessionId - The session ID
+     * @param {string} [reason=""] - Reason for starting the focus
+     * @returns {Promise<void>}
+     */
     static async insertFocus(url, sessionId, reason="") {
         // A focus might get triggered when seeing chrome settings and such
         if (!Aux.isEligibleUrl(url)) return;
@@ -701,6 +975,14 @@ class Storage {
         await wl()
     }
 
+    /**
+     * Inserts a new session for a URL, tab, and window
+     * @param {string} url - The URL to track
+     * @param {number} tabId - The tab ID
+     * @param {number} windowId - The window ID
+     * @param {string} [reason=""] - Reason for starting the session
+     * @returns {Promise<void>}
+     */
     static async insertSession(url, tabId, windowId, reason="") {
         if (!Aux.isEligibleUrl(url)) return;
         const sessionId = Aux.generateId();
@@ -717,6 +999,11 @@ class Storage {
         await wl()
     }
 
+    /**
+     * Creates a write lock to ensure atomic storage modifications
+     * @param {Function} mod - Modifier function that takes raw data and returns modified raw data
+     * @returns {Function} A function that executes the modification and saves to storage
+     */
     static writeLock(mod) {
         return () => {
             this.saveLock = this.saveLock.then(async () => {
@@ -731,12 +1018,12 @@ class Storage {
 
 class BlockHourDiagram {
     /**
-     * Creates a 24-hour block diagram
-     * @param {Array} data - Array of 24 objects with {strength: number, number: number}
+     * Creates a 24-hour block diagram visualization
+     * @param {Array<Object>} data - Array of 24 objects with {strength: number, number: number}
      *                       strength: 0-1 value for opacity (0 = transparent, 1 = opaque)
      *                       number: value to display in the block
-     * @param {Object} options - Configuration options
-     * @returns {HTMLElement} - Container element with the diagram
+     * @param {Object} [options={}] - Configuration options (width, height, baseColor, etc.)
+     * @returns {HTMLElement} Container element with the diagram
      */
     static create(data, options = {}) {
         if (!Array.isArray(data) || data.length !== 24) {
@@ -828,6 +1115,9 @@ class BlockHourDiagram {
     /**
      * Converts hex color to rgba with opacity
      * @private
+     * @param {string} hex - Hex color code (with or without #)
+     * @param {number} alpha - Opacity value (0-1)
+     * @returns {string} RGBA color string
      */
     static _hexToRgba(hex, alpha) {
         // Remove # if present
@@ -844,7 +1134,8 @@ class BlockHourDiagram {
     /**
      * Updates existing diagram with new data
      * @param {HTMLElement} container - The diagram container
-     * @param {Array} data - New data array
+     * @param {Array<Object>} data - New data array of 24 objects
+     * @returns {void}
      */
     static update(container, data) {
         if (!container || !container.classList.contains('block-hour-diagram')) {
@@ -870,8 +1161,8 @@ class BlockHourDiagram {
     }
 
     /**
-     * Creates sample data for testing
-     * @returns {Array} Sample data array
+     * Creates sample data for testing the diagram
+     * @returns {Array<Object>} Sample data array with 24 objects containing random values
      */
     static createSampleData() {
         return Array.from({ length: 24 }, (_, i) => ({
@@ -884,11 +1175,9 @@ class BlockHourDiagram {
 class BlockDayDiagram {
     /**
      * Creates a 7-day x 24-hour block diagram representing a week
-     * @param {Array} data - Array of 7 arrays, each containing 24 objects with {strength: number, number: number}
-     *                       strength: 0-1 value for opacity (0 = transparent, 1 = opaque)
-     *                       number: value to display in the block
-     * @param {Object} options - Configuration options
-     * @returns {HTMLElement} - Container element with the diagram
+     * @param {Array<Array<number>>} data - Array of 7 arrays, each containing 24 numbers representing seconds
+     * @param {Object} [options={}] - Configuration options (width, height, baseColor, etc.)
+     * @returns {HTMLElement} Container element with the diagram
      */
     static create(data, options = {}) {
         if (!Array.isArray(data) || data.length !== 7) {
@@ -1085,6 +1374,9 @@ class BlockDayDiagram {
     /**
      * Converts hex color to rgba with opacity
      * @private
+     * @param {string} hex - Hex color code (with or without #)
+     * @param {number} alpha - Opacity value (0-1)
+     * @returns {string} RGBA color string
      */
     static _hexToRgba(hex, alpha) {
         // Remove # if present
@@ -1101,7 +1393,8 @@ class BlockDayDiagram {
     /**
      * Updates existing diagram with new data
      * @param {HTMLElement} container - The diagram container
-     * @param {Array} data - New data array (7 days x 24 hours)
+     * @param {Array<Array<number>>} data - New data array (7 days x 24 hours)
+     * @returns {void}
      */
     static update(container, data) {
         if (!container || !container.classList.contains('block-day-diagram')) {
@@ -1139,8 +1432,8 @@ class BlockDayDiagram {
     }
 
     /**
-     * Creates sample data for testing
-     * @returns {Array} Sample data array (7 days x 24 hours)
+     * Creates sample data for testing the weekly diagram
+     * @returns {Array<Array<Object>>} Sample data array (7 days x 24 hours)
      */
     static createSampleData() {
         return Array.from({ length: 7 }, () =>
@@ -1152,6 +1445,9 @@ class BlockDayDiagram {
     }
 }
 
+/**
+ * Span class - UNK (no implementation provided)
+ */
 class Span {}
 
 if (typeof module !== 'undefined' && module.exports) {
