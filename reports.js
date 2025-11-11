@@ -151,6 +151,7 @@ async function displayDailyBreakdown(startTimestamp, endTimestamp) {
   
   // Generate block day diagram data for the selected website
   const weekData = await Storage.generateBlockDayData(selectedUrl);
+  console.log("week data:", weekData);
   
   // Create the block day diagram
   const diagram = BlockDayDiagram.create(weekData, {

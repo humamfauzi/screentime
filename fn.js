@@ -96,8 +96,7 @@ class Aux {
         // Calculate offset in days from the start date
         let dayOffset = 0;
         
-        while (remaining > 0 && (currentDay + dayOffset) < 7) {
-            const actualDay = (currentDay + dayOffset) % 7;
+        while (remaining > 0 && currentDay < 7) {
             const nextUnixHour = new Date(
                 start.getFullYear(), 
                 start.getMonth(), 
@@ -107,13 +106,14 @@ class Aux {
             const secondsToNextHour = Math.ceil((nextUnixHour - unixStart) / 1000);
             const secondsToAdd = Math.min(secondsToNextHour, remaining);
             
-            divisions[actualDay][currentHour] += secondsToAdd;
+            divisions[currentDay][currentHour] += secondsToAdd;
             remaining -= secondsToAdd;
             currentHour++;
             
             if (currentHour >= 24) {
                 currentHour = 0;
                 dayOffset++;
+                currentDay++;
             }
             unixStart = nextUnixHour;
         }
@@ -307,22 +307,21 @@ class Storage {
         const [start, end] = Aux.currentStartAndEndWeek(new Date())
         const raw = await this.getRaw();
         const weekData = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
-        for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
-            if (raw[url]) {
-                const sessions = raw[url];
-                for (const sessionId in sessions) {
-                    const session = sessions[sessionId];
-                    if (session.focus) {
-                        for (const focusId in session.focus) {
-                            const focus = session.focus[focusId];
-                            if (focus.total && focus.start >= start && focus.start <= end) {
-                                const focusStart = new Date(focus.start);
-                                const focdiv = Aux.focusDivisionWeek(focusStart, focus.total)
-                                for (let d = 0; d < 7; d++) {
-                                    for (let hr = 0; hr < 24; hr++) {
-                                        weekData[d][hr] += focdiv[d][hr];
-                                    }
-                                }
+        if (!raw[url]) {
+            return weekData; // No data for this URL
+        }
+        const sessions = raw[url];
+        for (const sessionId in sessions) {
+            const session = sessions[sessionId];
+            if (session.focus) {
+                for (const focusId in session.focus) {
+                    const focus = session.focus[focusId];
+                    if (focus.total && focus.start >= start && focus.start <= end) {
+                        const focusStart = new Date(focus.start);
+                        const focdiv = Aux.focusDivisionWeek(focusStart, focus.total)
+                        for (let d = 0; d < 7; d++) {
+                            for (let hr = 0; hr < 24; hr++) {
+                                weekData[d][hr] += focdiv[d][hr];
                             }
                         }
                     }
@@ -971,7 +970,7 @@ class BlockDayDiagram {
                 font-size: 10px;
                 color: ${config.dayLabelColor};
                 position: relative;
-                ${(h === 6 || h === 12 || h === 18) ? `border-right: ${config.quarterMarkWidth} solid ${config.quarterMarkColor};` : ''}
+                ${(h === 5 || h === 11 || h === 17) ? `border-right: ${config.quarterMarkWidth} solid ${config.quarterMarkColor};` : ''}
             `;
             
             // Show numbers at quarters
@@ -1024,9 +1023,10 @@ class BlockDayDiagram {
 
             // Create 24 blocks for each hour
             for (let hour = 0; hour < 24; hour++) {
-                const blockData = data[day][hour] || { strength: 0, number: 0 };
-                const strength = Math.max(0, Math.min(1, blockData.strength || 0));
-                const displayNumber = blockData.number !== undefined ? blockData.number : '';
+                const blockData = data[day][hour] || 0;
+                // Normalize strength against max value of 3600
+                const strength = Math.max(0, Math.min(1, blockData / 3600));
+                const displayNumber = blockData
 
                 const block = document.createElement('div');
                 block.className = 'hour-block';
@@ -1034,7 +1034,7 @@ class BlockDayDiagram {
                 block.dataset.hour = hour;
                 
                 // Add quarter-day markers (after hours 6, 12, 18)
-                const hasMarker = hour === 6 || hour === 12 || hour === 18;
+                const hasMarker = hour === 5 || hour === 11 || hour === 17;
                 
                 block.style.cssText = `
                     flex: 1;
@@ -1124,12 +1124,13 @@ class BlockDayDiagram {
         rows.forEach((row, day) => {
             const blocks = row.querySelectorAll('.hour-block');
             blocks.forEach((block, hour) => {
-                const blockData = data[day][hour] || { strength: 0, number: 0 };
-                const strength = Math.max(0, Math.min(1, blockData.strength || 0));
-                const displayNumber = blockData.number !== undefined ? blockData.number : '';
+                const blockData = data[day][hour] || 0;
+                // Normalize strength against max value of 3600
+                const strength = Math.max(0, Math.min(1, blockData / 3600));
+                const displayNumber = blockData;
 
                 block.style.backgroundColor = this._hexToRgba(baseColor, strength);
-                block.querySelector('span').textContent = displayNumber;
+                block.querySelector('span').textContent = "";
                 
                 const dayLabels = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
                 block.title = `${dayLabels[day]} ${hour}:00 - Value: ${displayNumber}`;
