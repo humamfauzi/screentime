@@ -18,6 +18,49 @@ let _ = {
     }
 }
 
+_ = {
+    "focuses": [
+        {
+            "url": "subdomain.domain.com",
+            "start": 1695984000000,
+            "start_reason": "tab_created",
+            "end": 1695987600000,
+            "end_reason": "tab_closed",
+            "total": 3600000,
+        }
+    ],
+    "display": {
+        "today": {
+            "total_time": 7200000,
+            "site_visited": 5,
+            // always reorder from the most used to least used
+            "websites": [
+                {
+                    "url": "subdomain.domain.com",
+                    "hour_block": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // seconds per hour
+                },
+                {
+                    "url": "another.domain.com",
+                    "hour_block": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // seconds per hour
+                }
+            ]
+        },
+        // always reorder from the most used to least used
+        "reports": [
+            {
+                "url": "subdomain.domain.com",
+                "blocks": [
+                    {
+                        "unix": 1695984000000, // start of a date
+                        "hour_block": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // seconds per hour
+                    },
+
+                ]
+            }
+        ]
+    }
+}
+
 class Aux {
     /**
      * Extracts the hostname (including subdomains) from a URL
