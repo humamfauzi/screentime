@@ -19,6 +19,8 @@ let _ = {
 }
 
 _ = {
+    "version": "2.0",
+    "settings": {},
     "focuses": [
         {
             "url": "subdomain.domain.com",
@@ -37,18 +39,19 @@ _ = {
             "websites": [
                 {
                     "url": "subdomain.domain.com",
+                    "total_time": 3600000,
                     "hour_block": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // seconds per hour
                 },
                 {
                     "url": "another.domain.com",
+                    "total_time": 3600000,
                     "hour_block": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // seconds per hour
                 }
             ]
         },
-        // always reorder from the most used to least used
-        "reports": [
-            {
-                "url": "subdomain.domain.com",
+        // reports are now a dictionary with URL as key
+        "reports": {
+            "subdomain.domain.com": {
                 "blocks": [
                     {
                         "unix": 1695984000000, // start of a date
@@ -57,7 +60,7 @@ _ = {
 
                 ]
             }
-        ]
+        }
     }
 }
 
@@ -1488,11 +1491,348 @@ class BlockDayDiagram {
     }
 }
 
+class StorageV2 {
+    static storageKey = 'v2';
+    static saveLock = Promise.resolve();
+
+    // ========== PRIVATE HELPER METHODS ==========
+
+    /**
+     * (Private) Retrieves the entire V2 storage object.
+     * @returns {Promise<Object>} The V2 storage object.
+     */
+    static async _getStorage() {
+        const data = await chrome.storage.local.get([this.storageKey]);
+        return data[this.storageKey] || {
+            version: "2.0",
+            settings: {},
+            focuses: [],
+            display: {
+                today: {},
+                reports: {}
+            }
+        };
+    }
+
+    /**
+     * (Private) Retrieves the 'focuses' array from storage.
+     * @returns {Promise<Array>} The array of focus sessions.
+     */
+    static async _getFocuses() {
+        const storage = await this._getStorage();
+        return storage.focuses;
+    }
+
+    /**
+     * (Private) Retrieves the 'display' object from storage.
+     * @returns {Promise<Object>} The display data object.
+     */
+    static async _getDisplay() {
+        const storage = await this._getStorage();
+        return storage.display;
+    }
+
+    /**
+     * (Private) Generates the 'display.today' object from focus data.
+     * @param {Array} focuses - The array of focus sessions.
+     * @param {Date} date - The target date for the 'today' view.
+     * @returns {Object} The generated 'today' object.
+     */
+    static _generateDisplayToday(focuses, date) {
+        const [startOfDay, endOfDay] = Aux.currentStartAndEnd(date);
+
+        const todaysFocuses = focuses.filter(f => f.start >= startOfDay && f.start <= endOfDay && f.total);
+
+        let totalTime = 0;
+        const sites = {}; // Using an object for easier aggregation
+
+        for (const focus of todaysFocuses) {
+            totalTime += focus.total;
+
+            if (!sites[focus.url]) {
+                sites[focus.url] = {
+                    url: focus.url,
+                    total_time: 0,
+                    hour_block: Array.from({ length: 24 }, () => 0)
+                };
+            }
+
+            sites[focus.url].total_time += focus.total;
+            const focusStart = new Date(focus.start);
+            const divisions = Aux.focusDivision(focusStart, focus.total);
+            for (let i = 0; i < 24; i++) {
+                sites[focus.url].hour_block[i] += divisions[i];
+            }
+        }
+
+        const websites = Object.values(sites).sort((a, b) => b.total_time - a.total_time);
+
+        return {
+            total_time: totalTime,
+            site_visited: websites.length,
+            websites: websites
+        };
+    }
+
+    /**
+     * (Private) Generates the 'display.reports' object from focus data.
+     * @param {Array} focuses - The array of focus sessions.
+     * @returns {Object} The generated 'reports' object.
+     */
+    static _generateDisplayReports(focuses) {
+        const reports = {};
+        const completedFocuses = focuses.filter(f => f.total);
+
+        for (const focus of completedFocuses) {
+            const url = focus.url;
+
+            if (!reports[url]) {
+                reports[url] = {
+                    blocks: {} // Use a temporary object with unix timestamp as key for quick access
+                };
+            }
+
+            const focusStart = new Date(focus.start);
+            const startOfDay = new Date(focusStart.getFullYear(), focusStart.getMonth(), focusStart.getDate()).getTime();
+
+            if (!reports[url].blocks[startOfDay]) {
+                reports[url].blocks[startOfDay] = {
+                    unix: startOfDay,
+                    hour_block: Array(24).fill(0)
+                };
+            }
+
+            const divisions = Aux.focusDivision(focusStart, focus.total);
+            for (let i = 0; i < 24; i++) {
+                reports[url].blocks[startOfDay].hour_block[i] += divisions[i];
+            }
+        }
+
+        // Convert the blocks object into an array for each URL
+        for (const url in reports) {
+            reports[url].blocks = Object.values(reports[url].blocks);
+        }
+
+        return reports;
+    }
+
+    /**
+     * (Private) A central method to update the 'focuses' array, regenerate
+     * the 'display' object, and save everything to storage.
+     * @param {Function} modification - A function that takes the current 'focuses' array and returns the modified version.
+     * @returns {Promise<void>}
+     */
+    static async _updateAndSave(modification) {
+        this.saveLock = this.saveLock.then(async () => {
+            const storage = await this._getStorage();
+            const newFocuses = modification(storage.focuses);
+
+            const newDisplay = {
+                today: this._generateDisplayToday(newFocuses, new Date()),
+                reports: this._generateDisplayReports(newFocuses)
+            };
+
+            const newStorage = {
+                ...storage,
+                focuses: newFocuses,
+                display: newDisplay
+            };
+
+            await chrome.storage.local.set({ [this.storageKey]: newStorage });
+        });
+        return this.saveLock;
+    }
+
+    // ========== PUBLIC READ METHODS (Alphabetical) ==========
+
+    /**
+     * Generates a 7-day x 24-hour grid of focus time data for a specific URL (current week).
+     * @param {string} url - The URL to generate data for.
+     * @returns {Promise<Array<Array<number>>>} 7x24 array of seconds spent per day/hour.
+     */
+    static async generateBlockDayData(url) {
+        const display = await this._getDisplay();
+        const [startOfWeek, endOfWeek] = Aux.currentStartAndEndWeek(new Date());
+        const weekData = Array.from({ length: 7 }, () => Array(24).fill(0));
+
+        if (display.reports && display.reports[url]) {
+            const reportBlocks = display.reports[url].blocks;
+            for (const block of reportBlocks) {
+                if (block.unix >= startOfWeek && block.unix <= endOfWeek) {
+                    const dayOfWeek = new Date(block.unix).getDay(); // 0 (Sun) - 6 (Sat)
+                    weekData[dayOfWeek] = block.hour_block;
+                }
+            }
+        }
+        return weekData;
+    }
+
+    /**
+     * Generates a 24-hour array of focus time data for a specific URL (today only).
+     * @param {string} url - The URL to generate data for.
+     * @returns {Promise<Array<number>>} Array of 24 numbers representing seconds per hour.
+     */
+    static async generateBlockHourData(url) {
+        const display = await this._getDisplay();
+        let hourData = Array(24).fill(0);
+
+        if (display.today && display.today.websites) {
+            const site = display.today.websites.find(w => w.url === url);
+            if (site) {
+                hourData = site.hour_block;
+            }
+        }
+        return hourData;
+    }
+
+    /**
+     * Calculates the average focus duration within a time range.
+     * @param {number} start - Start timestamp in milliseconds.
+     * @param {number} end - End timestamp in milliseconds.
+     * @returns {Promise<number>} Average focus duration in milliseconds.
+     */
+    static async getAverageFocus(start, end) {
+        const focuses = await this._getFocuses();
+        const relevantFocuses = focuses.filter(f => f.total && f.start >= start && f.start <= end);
+
+        if (relevantFocuses.length === 0) {
+            return 0;
+        }
+
+        const totalDuration = relevantFocuses.reduce((sum, f) => sum + f.total, 0);
+        return totalDuration / relevantFocuses.length;
+    }
+
+    /**
+     * Calculates the total focus time within a time range.
+     * @param {number} start - Start timestamp in milliseconds.
+     * @param {number} end - End timestamp in milliseconds.
+     * @returns {Promise<number>} Total focus time in milliseconds.
+     */
+    static async getFocusSum(start, end) {
+        const [startOfDay, endOfDay] = Aux.currentStartAndEnd(new Date());
+        if (start === startOfDay && end === endOfDay) {
+            const display = await this._getDisplay();
+            return display.today.total_time || 0;
+        }
+
+        // Fallback for custom date ranges
+        const focuses = await this._getFocuses();
+        return focuses
+            .filter(f => f.total && f.start >= start && f.start <= end)
+            .reduce((sum, f) => sum + f.total, 0);
+    }
+
+    /**
+     * Calculates the total focus time grouped by URL within a time range.
+     * @param {number} start - Start timestamp in milliseconds.
+     * @param {number} end - End timestamp in milliseconds.
+     * @returns {Promise<Object>} Object with URLs as keys and total focus time as values.
+     */
+    static async getFocusSumByURL(start, end) {
+        const [startOfDay, endOfDay] = Aux.currentStartAndEnd(new Date());
+        if (start === startOfDay && end === endOfDay) {
+            const display = await this._getDisplay();
+            if (!display.today || !display.today.websites) return {};
+            
+            return display.today.websites.reduce((acc, site) => {
+                acc[site.url] = site.total_time;
+                return acc;
+            }, {});
+        }
+
+        // Fallback for custom date ranges
+        const focuses = await this._getFocuses();
+        const focusByURL = {};
+        focuses
+            .filter(f => f.total && f.start >= start && f.start <= end)
+            .forEach(f => {
+                if (!focusByURL[f.url]) {
+                    focusByURL[f.url] = 0;
+                }
+                focusByURL[f.url] += f.total;
+            });
+        return focusByURL;
+    }
+
+    /**
+     * Counts the total number of unique sites visited within a time range.
+     * @param {number} start - Start timestamp in milliseconds.
+     * @param {number} end - End timestamp in milliseconds.
+     * @returns {Promise<number>} The number of unique sites visited.
+     */
+    static async totalSitesVisited(start, end) {
+        const [startOfDay, endOfDay] = Aux.currentStartAndEnd(new Date());
+        if (start === startOfDay && end === endOfDay) {
+            const display = await this._getDisplay();
+            return display.today.site_visited || 0;
+        }
+
+        // Fallback for custom date ranges
+        const focuses = await this._getFocuses();
+        const uniqueUrls = new Set(
+            focuses
+                .filter(f => f.start >= start && f.start <= end)
+                .map(f => f.url)
+        );
+        return uniqueUrls.size;
+    }
+
+    // ========== PUBLIC WRITE METHODS (Alphabetical) ==========
+
+    /**
+     * Ends a focus session.
+     * @param {string} url - The URL of the session.
+     * @param {string} reason - Reason for ending the focus.
+     * @returns {Promise<void>}
+     */
+    static async endFocus(url, reason) {
+        if (!Aux.isEligibleUrl(url)) return;
+
+        return this._updateAndSave(focuses => {
+            // Find the last active focus for this URL
+            const activeFocus = focuses.slice().reverse().find(f => f.url === url && f.end === null);
+
+            if (activeFocus) {
+                const now = Date.now();
+                activeFocus.end = now;
+                activeFocus.end_reason = reason;
+                activeFocus.total = now - activeFocus.start;
+            }
+
+            return focuses;
+        });
+    }
+
+    /**
+     * Inserts a new focus session.
+     * @param {string} url - The URL of the session.
+     * @param {string} reason - Reason for starting the focus.
+     * @returns {Promise<void>}
+     */
+    static async insertFocus(url, reason) {
+        if (!Aux.isEligibleUrl(url)) return;
+
+        const newFocus = {
+            url: url,
+            start: Date.now(),
+            start_reason: reason,
+            end: null,
+            total: null
+        };
+
+        return this._updateAndSave(focuses => {
+            focuses.push(newFocus);
+            return focuses;
+        });
+    }
+}
+
 /**
  * Span class - UNK (no implementation provided)
  */
 class Span {}
 
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { Aux, Storage, BlockHourDiagram, BlockDayDiagram, ManualTest, Debug };
+    module.exports = { Aux, Storage, StorageV2, BlockHourDiagram, BlockDayDiagram, ManualTest, Debug };
 }
