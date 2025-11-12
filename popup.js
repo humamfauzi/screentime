@@ -39,62 +39,56 @@ async function loadHomePage() {
   const dateObj = new Date();
   const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
   dateElement.textContent = dateObj.toLocaleDateString('en-US', options);
-  const startDayUnix = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate()).getTime();
-  const endDayUnix = startDayUnix + 86400000 - 1; // End of the day
-  const totalFocus = await Storage.getFocusSum(startDayUnix, endDayUnix);
-  const totalFocusByURL = await Storage.getFocusSumByURL(startDayUnix, endDayUnix);
+  
+  const display = await StorageV2._getDisplay();
 
   // Load today's activity
-  await displayTodayActivity(totalFocus, totalFocusByURL);
+  await displayTodayActivity(display.today);
 }
 
-async function displayTodayActivity(totalFocus, totalFocusByURL) {
+async function displayTodayActivity(today) {
   const activityItems = document.getElementById('activity-items');
   const totalTimeElement = document.getElementById('total-time');
   const sitesCountElement = document.getElementById('sites-count');
 
-  const domains = Object.keys(totalFocusByURL);
-  if (domains.length === 0) {
+  if (!today || !today.websites || today.websites.length === 0) {
     activityItems.innerHTML = `
       <div class="empty-state">
         <p>No activity recorded yet today</p>
         <p class="empty-hint">Start browsing to see your activity here</p>
       </div>
     `;
-    totalTimeElement.textContent = '0h 0m';Storage
+    totalTimeElement.textContent = '0h 0m';
     sitesCountElement.textContent = '0';
     return;
   }
 
   // Calculate total time
-  const seconds = totalFocus / 1000
-  totalTimeElement.textContent = formatTime(seconds);
-  sitesCountElement.textContent = domains.length;
-
-  const zip = Object.entries(totalFocusByURL).map(([domain, ms]) => [domain, ms / 1000]);
-  const sorted = zip.sort((a, b) => b[1] - a[1]);
+  const totalSeconds = (today.total_time || 0) / 1000;
+  totalTimeElement.textContent = formatTime(totalSeconds);
+  sitesCountElement.textContent = today.site_visited || 0;
 
   // Clear activity items
   activityItems.innerHTML = '';
 
   // Create activity items with block hour diagrams
-  for (const [domain, timeSpent] of sorted) {
+  for (const website of today.websites) {
     const activityItem = document.createElement('div');
     activityItem.className = 'activity-item';
     
     // Create domain name element
     const domainElement = document.createElement('div');
     domainElement.className = 'activity-domain';
-    domainElement.textContent = domain;
-    domainElement.title = domain; // Show full domain on hover
+    domainElement.textContent = website.url;
+    domainElement.title = website.url; // Show full domain on hover
     
     // Create time element
     const timeElement = document.createElement('div');
     timeElement.className = 'activity-time';
-    timeElement.textContent = formatTime(timeSpent);
+    timeElement.textContent = formatTime(website.total_time / 1000);
     
     // Generate block hour diagram
-    const hourData = await Storage.generateBlockHourData(domain);
+    const hourData = website.hour_block.map(seconds => ({ strength: seconds }));
     const blockDiagram = BlockHourDiagram.create(hourData, {
       baseColor: '#4A90E2',
       textColor: '#fff',

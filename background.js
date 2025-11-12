@@ -1,4 +1,3 @@
-
 if (typeof importScripts !== 'undefined') {
     importScripts('fn.js');
     if (typeof StorageV2 !== 'undefined') {
@@ -116,19 +115,36 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
     await Debug.logEventTabActivated({activeInfo});
     try {
-        // End focus on the previously focused tab.
-        if (currentFocus && currentFocus.url) {
-            await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
+        const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
+        if (!activeTab) {
+            if (currentFocus && currentFocus.url) {
+                await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
+            }
+            currentFocus = null;
+            return;
         }
 
-        // Get the newly activated tab to start a new focus session.
-        const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
-        if (!activeTab || !Aux.isEligibleUrl(activeTab.url)) {
-            currentFocus = null; // The new tab is not trackable.
+        if (!Aux.isEligibleUrl(activeTab.url)) {
+            if (currentFocus && currentFocus.url) {
+                await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
+            }
+            currentFocus = null;
             return;
         }
         
         const activeTld = Aux.getTLD(activeTab.url);
+
+        if (currentFocus && currentFocus.url === activeTld) {
+            // It's the same TLD, but we should ensure the tabId is up-to-date.
+            // This can happen if you switch to a different tab on the same domain.
+            currentFocus.tabId = activeInfo.tabId;
+            return; // No change in focus needed.
+        }
+
+        // End focus on the previously focused tab.
+        if (currentFocus && currentFocus.url) {
+            await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
+        }
         
         // Start focus on the new tab.
         await Storage.insertFocus(activeTld, ev.tabActivated);
