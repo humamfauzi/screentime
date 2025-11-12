@@ -1,7 +1,9 @@
-const Storage = StorageV2;
 
 if (typeof importScripts !== 'undefined') {
     importScripts('fn.js');
+    if (typeof StorageV2 !== 'undefined') {
+        Storage = StorageV2;
+    }
 }
 
 let currentFocus = null; // object {url, tabId}
