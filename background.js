@@ -1,243 +1,207 @@
 if (typeof importScripts !== 'undefined') {
     importScripts('fn.js');
-    if (typeof StorageV2 !== 'undefined') {
-        Storage = StorageV2;
+}
+
+/**
+ * Polling-based screen time tracker.
+ * Accumulates time in memory and writes to storage periodically to avoid quota issues.
+ */
+
+const STORAGE_KEY = 'v2';
+const WRITE_INTERVAL_MS = 5000; // Write to storage every 5 seconds
+
+// In-memory accumulator: { [url]: { seconds: number, hours: { [hour]: number } } }
+let pendingUpdates = {};
+let lastWriteTime = Date.now();
+
+/**
+ * Gets the currently focused tab's URL
+ * @returns {Promise<string|null>} The hostname of the focused tab, or null if not eligible
+ */
+async function getFocusedTabUrl() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (!tab || !tab.url || !Aux.isEligibleUrl(tab.url)) {
+            return null;
+        }
+        return Aux.getTLD(tab.url);
+    } catch (e) {
+        return null;
     }
 }
 
-let currentFocus = null; // object {url, tabId}
-
-const ev = {
-    startup: 'startup',
-    tabCreated: 'tab_created',
-    tabUpdated: 'tab_updated',
-    tabActivated: 'tab_activated',
-    tabRemoved: 'tab_removed',
-    tabDetached: 'tab_detached',
-    tabAttached: 'tab_attached',
-    tabReplaced: 'tab_replaced',
-    windowFocusLost: 'window_focus_lost',
-    windowFocusGained: 'window_focus_gained',
-    windowRemoved: 'window_removed',
-    suspend: 'suspend',
-    domainChanged: 'domain_changed',
-    tabDeactivated: 'tab_deactivated'
+/**
+ * Gets the storage with default structure
+ */
+async function getStorage() {
+    const data = await chrome.storage.local.get([STORAGE_KEY]);
+    return data[STORAGE_KEY] || {
+        version: "2.0",
+        settings: {},
+        display: {
+            today: { total_time: 0, site_visited: 0, websites: [], date_unix: 0 },
+            reports: {}
+        }
+    };
 }
 
-// event when extension is installed or initiated
-chrome.runtime.onInstalled.addListener(async () => {
-    await Debug.logEventInstalled();
-    // StorageV2 handles its own initialization.
-});
-
-// event when browser starts (not just extension install/update)
-chrome.runtime.onStartup.addListener(async () => {
-    await Debug.logEventStartup();
-    // Find the active tab in the focused window
-    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (tabs.length > 0) {
-        const tab = tabs[0];
-        if (Aux.isEligibleUrl(tab.url)) {
-            const tld = Aux.getTLD(tab.url);
-            await Storage.insertFocus(tld, ev.startup);
-            currentFocus = {url: tld, tabId: tab.id};
-        }
-    }
-});
-
-// A new tab is created. It may or may not be active.
-chrome.tabs.onCreated.addListener(async (tab) => {
-    await Debug.logEventTabCreated({tab});
+/**
+ * Accumulates one second for a URL in memory
+ * @param {string} url - The hostname to track
+ */
+function accumulateSecond(url) {
+    const hour = new Date().getHours();
     
-    // If the new tab is not active, we don't need to do anything.
-    // The focus remains on the currently active tab.
-    if (!tab.active) {
-        return;
-    }
-
-    // The new tab is active, so it steals focus.
-    // End focus on the previously focused tab.
-    if (currentFocus && currentFocus.url) {
-        await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
-    }
-
-    const tld = Aux.getTLD(tab.url);
-    
-    // Only track eligible URLs
-    if (!Aux.isEligibleUrl(tab.url)) {
-        currentFocus = null; // The new active tab is not trackable
-        return;
+    if (!pendingUpdates[url]) {
+        pendingUpdates[url] = { seconds: 0, hours: {} };
     }
     
-    // Start focus for the new tab
-    await Storage.insertFocus(tld, ev.tabCreated);
-    currentFocus = {url: tld, tabId: tab.id};
-});
+    pendingUpdates[url].seconds += 1;
+    pendingUpdates[url].hours[hour] = (pendingUpdates[url].hours[hour] || 0) + 1;
+}
 
-// The URL of a tab has changed.
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-    // We only care about URL changes for the moment.
-    if (!changeInfo.url) {
-        return;
-    }
-    await Debug.logEventTabUpdated({tabId, changeInfo, tab});
-
-    // If the updated tab is not the one in focus, we don't need to do anything.
-    // This can happen for background tabs.
-    if (!tab.active || (currentFocus && tabId !== currentFocus.tabId)) {
+/**
+ * Flushes accumulated data to storage
+ */
+async function flushToStorage() {
+    if (Object.keys(pendingUpdates).length === 0) {
         return;
     }
 
-    const newTld = Aux.getTLD(changeInfo.url);
+    const updates = pendingUpdates;
+    pendingUpdates = {}; // Reset accumulator
 
-    // If the TLD is the same, do nothing.
-    if (currentFocus && newTld === currentFocus.url) {
-        return;
-    }
-
-    // The URL of the focused tab has changed. End focus on the old URL.
-    if (currentFocus && currentFocus.url) {
-        await Storage.endFocus(currentFocus.url, ev.domainChanged);
-    }
-
-    // If the new URL is not eligible, we are done.
-    if (!Aux.isEligibleUrl(changeInfo.url)) {
-        currentFocus = null;
-        return;
-    }
-
-    // Start focus on the new TLD.
-    await Storage.insertFocus(newTld, ev.tabUpdated);
-    currentFocus = {url: newTld, tabId: tab.id};
-});
-
-// The user has switched to a different tab.
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
-    await Debug.logEventTabActivated({activeInfo});
     try {
-        const activeTab = await chrome.tabs.get(activeInfo.tabId).catch(() => null);
-        if (!activeTab) {
-            if (currentFocus && currentFocus.url) {
-                await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
+        const storage = await getStorage();
+        const now = new Date();
+        const [startOfDay] = Aux.currentStartAndEnd(now);
+
+        // Initialize display structure if needed
+        if (!storage.display) {
+            storage.display = { today: {}, reports: {} };
+        }
+        if (!storage.display.today) {
+            storage.display.today = { total_time: 0, site_visited: 0, websites: [], date_unix: 0 };
+        }
+        if (!storage.display.reports) {
+            storage.display.reports = {};
+        }
+
+        // Check if we need to reset today (new day started)
+        if (storage.display.today.date_unix && storage.display.today.date_unix !== startOfDay) {
+            storage.display.today = { 
+                total_time: 0, 
+                site_visited: 0, 
+                websites: [],
+                date_unix: startOfDay
+            };
+        }
+        storage.display.today.date_unix = startOfDay;
+
+        // Apply accumulated updates
+        for (const url in updates) {
+            const update = updates[url];
+            const secondsMs = update.seconds * 1000;
+
+            // Update display.today.total_time
+            storage.display.today.total_time = (storage.display.today.total_time || 0) + secondsMs;
+
+            // Update or create website entry in today
+            let siteEntry = storage.display.today.websites.find(w => w.url === url);
+            if (!siteEntry) {
+                siteEntry = {
+                    url: url,
+                    total_time: 0,
+                    hour_block: Array(24).fill(0)
+                };
+                storage.display.today.websites.push(siteEntry);
             }
-            currentFocus = null;
-            return;
-        }
-
-        if (!Aux.isEligibleUrl(activeTab.url)) {
-            if (currentFocus && currentFocus.url) {
-                await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
+            siteEntry.total_time += secondsMs;
+            
+            // Apply hour updates
+            for (const hour in update.hours) {
+                siteEntry.hour_block[parseInt(hour)] += update.hours[hour];
             }
-            currentFocus = null;
-            return;
-        }
-        
-        const activeTld = Aux.getTLD(activeTab.url);
 
-        if (currentFocus && currentFocus.url === activeTld) {
-            // It's the same TLD, but we should ensure the tabId is up-to-date.
-            // This can happen if you switch to a different tab on the same domain.
-            currentFocus.tabId = activeInfo.tabId;
-            return; // No change in focus needed.
-        }
+            // Update display.reports
+            if (!storage.display.reports[url]) {
+                storage.display.reports[url] = { blocks: [] };
+            }
 
-        // End focus on the previously focused tab.
-        if (currentFocus && currentFocus.url) {
-            await Storage.endFocus(currentFocus.url, ev.tabDeactivated);
-        }
-        
-        // Start focus on the new tab.
-        await Storage.insertFocus(activeTld, ev.tabActivated);
-        currentFocus = {url: activeTld, tabId: activeInfo.tabId};
-
-    } catch (error) {
-        console.error('Error in onActivated listener:', error);
-    }
-});
-
-chrome.tabs.onRemoved.addListener(async (tabId, removeInfo) => {
-    await Debug.logEventTabRemoved({tabId, removeInfo});
-    // If the removed tab was the one in focus, end the focus.
-    if (currentFocus && currentFocus.tabId === tabId) {
-        await Storage.endFocus(currentFocus.url, ev.tabRemoved);
-        currentFocus = null;
-    }
-});
-
-// A tab is detached from a window, perhaps to become a new window.
-chrome.tabs.onDetached.addListener(async (tabId, detachInfo) => {
-    await Debug.logEventTabDetached({tabId, detachInfo});
-    // The tab is in transit. If it was the focused tab, its focus should end.
-    // A new focus will start when it is attached to a new window or when a new tab becomes active.
-    if (currentFocus && currentFocus.tabId === tabId) {
-        await Storage.endFocus(currentFocus.url, ev.tabDetached);
-        currentFocus = null;
-    }
-});
-
-// A tab is attached to a window.
-chrome.tabs.onAttached.addListener(async (tabId, attachInfo) => {
-    await Debug.logEventTabAttached({tabId, attachInfo});
-    // When a tab is attached, it might become the active tab in that window.
-    // We'll rely on the onActivated event to handle the focus change.
-    // No action needed here as onActivated will fire if this tab becomes active.
-});
-
-// A tab is replaced by another, e.g. due to prerendering.
-chrome.tabs.onReplaced.addListener(async (addedTabId, removedTabId) => {
-    await Debug.logEventTabReplaced({addedTabId, removedTabId});
-    // If the replaced tab was the one in focus, update the tabId.
-    if (currentFocus && currentFocus.tabId === removedTabId) {
-        currentFocus.tabId = addedTabId;
-    }
-});
-
-// The user has switched to a different window.
-chrome.windows.onFocusChanged.addListener(async (windowId) => {
-    await Debug.logEventWindowFocusChanged({windowId});
-    try {
-        // End focus on the previously focused tab.
-        if (currentFocus && currentFocus.url) {
-            await Storage.endFocus(currentFocus.url, ev.windowFocusLost);
-            currentFocus = null;
+            let dayBlock = storage.display.reports[url].blocks.find(b => b.unix === startOfDay);
+            if (!dayBlock) {
+                dayBlock = {
+                    unix: startOfDay,
+                    hour_block: Array(24).fill(0)
+                };
+                storage.display.reports[url].blocks.push(dayBlock);
+                
+                // Keep only last 30 days of reports per URL to prevent storage bloat
+                if (storage.display.reports[url].blocks.length > 30) {
+                    storage.display.reports[url].blocks.shift();
+                }
+            }
+            
+            // Apply hour updates to reports
+            for (const hour in update.hours) {
+                dayBlock.hour_block[parseInt(hour)] += update.hours[hour];
+            }
         }
 
-        // If the browser has lost focus entirely
-        if (windowId === chrome.windows.WINDOW_ID_NONE) {
-            return;
+        // Update site_visited count
+        storage.display.today.site_visited = storage.display.today.websites.length;
+
+        // Sort websites by total_time descending
+        storage.display.today.websites.sort((a, b) => b.total_time - a.total_time);
+
+        // Save to storage
+        await chrome.storage.local.set({ [STORAGE_KEY]: storage });
+        lastWriteTime = Date.now();
+    } catch (e) {
+        console.error('Failed to flush to storage:', e);
+        // Restore pending updates on failure
+        for (const url in updates) {
+            if (!pendingUpdates[url]) {
+                pendingUpdates[url] = { seconds: 0, hours: {} };
+            }
+            pendingUpdates[url].seconds += updates[url].seconds;
+            for (const hour in updates[url].hours) {
+                pendingUpdates[url].hours[hour] = (pendingUpdates[url].hours[hour] || 0) + updates[url].hours[hour];
+            }
         }
-        
-        // Browser gained focus on a specific window. Start focus on its active tab.
-        const tabs = await chrome.tabs.query({ windowId: windowId, active: true });
-        if (tabs.length === 0) return;
-        
-        const activeTab = tabs[0];
-        if (!Aux.isEligibleUrl(activeTab.url)) return;
-        
-        const tld = Aux.getTLD(activeTab.url);
-        
-        await Storage.insertFocus(tld, ev.windowFocusGained);
-        currentFocus = {url: tld, tabId: activeTab.id};
-
-    } catch (error) {
-        console.error('Error in onFocusChanged listener:', error);
     }
-});
+}
 
-chrome.windows.onRemoved.addListener(async (windowId) => {
-    await Debug.logEventWindowRemoved({windowId});
-    // If the closed window contained the focused tab, the focus ends.
-    // The onRemoved event for the tab itself will handle ending the focus,
-    // so no specific action is needed here for focus management.
-    // We just log the event.
-});
+/**
+ * Main tick function - runs every second
+ */
+async function tick() {
+    const url = await getFocusedTabUrl();
+    
+    if (url) {
+        accumulateSecond(url);
+    }
 
-// The extension is being suspended.
+    // Flush to storage periodically
+    if (Date.now() - lastWriteTime >= WRITE_INTERVAL_MS) {
+        await flushToStorage();
+    }
+}
+
+// Use setInterval for per-second tracking
+setInterval(tick, 1000);
+
+// Flush on suspend to prevent data loss
 chrome.runtime.onSuspend.addListener(async () => {
-    await Debug.logEventSuspend();
-    // End the current focus session before suspension.
-    if (currentFocus && currentFocus.url) {
-        await Storage.endFocus(currentFocus.url, ev.suspend);
-        currentFocus = null;
-    }
+    await flushToStorage();
+});
+
+// Log installation for debugging
+chrome.runtime.onInstalled.addListener(async () => {
+    console.log('Screen Time extension installed/updated');
+});
+
+// Log startup for debugging  
+chrome.runtime.onStartup.addListener(async () => {
+    console.log('Screen Time extension started');
 });

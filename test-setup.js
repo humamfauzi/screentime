@@ -33,7 +33,31 @@ global.chrome = {
     onInstalled: { addListener: jest.fn() },
     onStartup: { addListener: jest.fn() },
     onSuspend: { addListener: jest.fn() }
+  },
+  idle: {
+    onStateChanged: { addListener: jest.fn() },
+    setDetectionInterval: jest.fn()
+  },
+  alarms: {
+    create: jest.fn(),
+    onAlarm: { addListener: jest.fn() }
   }
+};
+
+// Mock Debug class
+global.Debug = {
+  logEventInstalled: jest.fn().mockResolvedValue(undefined),
+  logEventStartup: jest.fn().mockResolvedValue(undefined),
+  logEventTabCreated: jest.fn().mockResolvedValue(undefined),
+  logEventTabUpdated: jest.fn().mockResolvedValue(undefined),
+  logEventTabActivated: jest.fn().mockResolvedValue(undefined),
+  logEventTabRemoved: jest.fn().mockResolvedValue(undefined),
+  logEventTabDetached: jest.fn().mockResolvedValue(undefined),
+  logEventTabAttached: jest.fn().mockResolvedValue(undefined),
+  logEventTabReplaced: jest.fn().mockResolvedValue(undefined),
+  logEventWindowFocusChanged: jest.fn().mockResolvedValue(undefined),
+  logEventWindowRemoved: jest.fn().mockResolvedValue(undefined),
+  logEventSuspend: jest.fn().mockResolvedValue(undefined)
 };
 
 // Reset mocks before each test

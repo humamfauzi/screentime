@@ -204,6 +204,21 @@ class Aux {
 }
 
 class ManualTest {
+    static async overlapFocuses() {
+        const raw = await StorageV2._getStorage();
+        const {focuses} = raw
+        const overlaps = []
+        for (let i = 0; i < focuses.length; i++) {
+            for (let j = i + 1; j < focuses.length; j++) {
+                const f1 = focuses[i];
+                const f2 = focuses[j];
+                if (f1.start < f2.end && f2.start < f1.end) {
+                    overlaps.push({f1, f2});
+                }
+            }
+        }
+        return overlaps;
+    }
     /**
      * Collects all focus sessions that occurred today
      * @returns {Promise<Array<Object>>} Array of focus session objects with url, focus_id, timestamps, duration, and reasons
@@ -1540,14 +1555,18 @@ class StorageV2 {
      */
     static _generateDisplayToday(focuses, date) {
         const [startOfDay, endOfDay] = Aux.currentStartAndEnd(date);
+        const now = Date.now();
 
-        const todaysFocuses = focuses.filter(f => f.start >= startOfDay && f.start <= endOfDay && f.total);
+        // Include both completed focuses AND active focuses (where total is null)
+        const todaysFocuses = focuses.filter(f => f.start >= startOfDay && f.start <= endOfDay);
 
         let totalTime = 0;
         const sites = {}; // Using an object for easier aggregation
 
         for (const focus of todaysFocuses) {
-            totalTime += focus.total;
+            // For active focuses, calculate duration as now - start
+            const duration = focus.total !== null ? focus.total : (now - focus.start);
+            totalTime += duration;
 
             if (!sites[focus.url]) {
                 sites[focus.url] = {
@@ -1557,9 +1576,9 @@ class StorageV2 {
                 };
             }
 
-            sites[focus.url].total_time += focus.total;
+            sites[focus.url].total_time += duration;
             const focusStart = new Date(focus.start);
-            const divisions = Aux.focusDivision(focusStart, focus.total);
+            const divisions = Aux.focusDivision(focusStart, duration);
             for (let i = 0; i < 24; i++) {
                 sites[focus.url].hour_block[i] += divisions[i];
             }
@@ -1581,10 +1600,12 @@ class StorageV2 {
      */
     static _generateDisplayReports(focuses) {
         const reports = {};
-        const completedFocuses = focuses.filter(f => f.total);
+        const now = Date.now();
 
-        for (const focus of completedFocuses) {
+        for (const focus of focuses) {
             const url = focus.url;
+            // For active focuses, calculate duration as now - start
+            const duration = focus.total !== null ? focus.total : (now - focus.start);
 
             if (!reports[url]) {
                 reports[url] = {
@@ -1602,7 +1623,7 @@ class StorageV2 {
                 };
             }
 
-            const divisions = Aux.focusDivision(focusStart, focus.total);
+            const divisions = Aux.focusDivision(focusStart, duration);
             for (let i = 0; i < 24; i++) {
                 reports[url].blocks[startOfDay].hour_block[i] += divisions[i];
             }
@@ -1629,7 +1650,8 @@ class StorageV2 {
 
             const newDisplay = {
                 today: this._generateDisplayToday(newFocuses, new Date()),
-                reports: this._generateDisplayReports(newFocuses)
+                reports: this._generateDisplayReports(newFocuses),
+                lastUpdated: Date.now()
             };
 
             const newStorage = {
@@ -1644,6 +1666,24 @@ class StorageV2 {
     }
 
     // ========== PUBLIC READ METHODS (Alphabetical) ==========
+
+    /**
+     * Retrieves the cached display data for fast popup reads.
+     * @returns {Promise<Object>} The cached display object with today and reports.
+     */
+    static async getDisplayCache() {
+        const storage = await this._getStorage();
+        return storage.display;
+    }
+
+    /**
+     * Refreshes the display cache without modifying focuses.
+     * Called periodically by alarm to update active focus duration in display.
+     * @returns {Promise<void>}
+     */
+    static async refreshDisplayCache() {
+        return this._updateAndSave(focuses => focuses);
+    }
 
     /**
      * Generates a 7-day x 24-hour grid of focus time data for a specific URL (current week).
@@ -1826,7 +1866,7 @@ class StorageV2 {
             return focuses;
         });
     }
-}
+};
 
 /**
  * Span class - UNK (no implementation provided)
