@@ -76,29 +76,39 @@ async function displayTodayActivity(today) {
     const activityItem = document.createElement('div');
     activityItem.className = 'activity-item';
     
-    // Create domain name element
+    // Top row: domain + time
+    const header = document.createElement('div');
+    header.className = 'activity-header';
+    
     const domainElement = document.createElement('div');
     domainElement.className = 'activity-domain';
     domainElement.textContent = website.url;
-    domainElement.title = website.url; // Show full domain on hover
+    domainElement.title = website.url;
     
-    // Create time element
     const timeElement = document.createElement('div');
     timeElement.className = 'activity-time';
     timeElement.textContent = formatTime(website.total_time / 1000);
     
-    // Generate block hour diagram
+    header.appendChild(domainElement);
+    header.appendChild(timeElement);
+    
+    // Bottom row: 24h block diagram (full width)
+    const blocksRow = document.createElement('div');
+    blocksRow.className = 'activity-blocks';
+    
     const hourData = website.hour_block.map(seconds => ({ strength: seconds }));
     const blockDiagram = BlockHourDiagram.create(hourData, {
-      baseColor: '#4A90E2',
-      textColor: '#fff',
-      borderColor: '#e0e0e0'
+      baseColor: '#333333',
+      textColor: '#999',
+      borderColor: '#ddd',
+      blockSize: '16px',
+      width: '100%'
     });
     
-    // Append all elements to activity item (grid layout)
-    activityItem.appendChild(domainElement);
-    activityItem.appendChild(blockDiagram);
-    activityItem.appendChild(timeElement);
+    blocksRow.appendChild(blockDiagram);
+    
+    activityItem.appendChild(header);
+    activityItem.appendChild(blocksRow);
     
     activityItems.appendChild(activityItem);
   }

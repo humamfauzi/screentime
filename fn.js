@@ -1092,13 +1092,13 @@ class BlockHourDiagram {
         }
 
         const defaults = {
-            width: 'fit-content',
-            height: '18px',
-            blockSize: '18px',
-            baseColor: '#4A90E2',
-            textColor: '#333',
+            width: '100%',
+            height: 'auto',
+            blockSize: '16px',
+            baseColor: '#333333',
+            textColor: '#999',
             borderColor: '#ddd',
-            quarterMarkColor: '#999',
+            quarterMarkColor: '#aaa',
             quarterMarkWidth: '2px'
         };
 
@@ -1108,7 +1108,7 @@ class BlockHourDiagram {
         const container = document.createElement('div');
         container.className = 'block-hour-diagram';
         container.style.cssText = `
-            display: inline-flex;
+            display: flex;
             width: ${config.width};
             height: ${config.height};
             border: 1px solid ${config.borderColor};
@@ -1128,10 +1128,8 @@ class BlockHourDiagram {
             // Add quarter-day markers (after hours 6, 12, 18) minus one because index start from 0
             const hasMarker = i === 5 || i === 11 || i === 17;
             block.style.cssText = `
-                flex: 0 0 ${config.blockSize};
-                min-width: ${config.blockSize};
-                max-width: ${config.blockSize};
-                width: ${config.blockSize};
+                flex: 1 1 0;
+                min-width: 0;
                 height: ${config.blockSize};
                 display: flex;
                 align-items: center;
@@ -1208,7 +1206,7 @@ class BlockHourDiagram {
         }
 
         const blocks = container.querySelectorAll('.hour-block');
-        const baseColor = '#4A90E2'; // Default, could be extracted from options
+        const baseColor = '#333333'; // Grey for receipt style
 
         blocks.forEach((block, i) => {
             const blockData = data[i] || { strength: 0, number: 0 };
@@ -1254,14 +1252,14 @@ class BlockDayDiagram {
         const defaults = {
             width: '100%',
             height: 'auto',
-            baseColor: '#4A90E2',
-            textColor: '#333',
+            baseColor: '#333333',
+            textColor: '#999',
             borderColor: '#ddd',
-            quarterMarkColor: '#999',
+            quarterMarkColor: '#aaa',
             quarterMarkWidth: '2px',
             blockHeight: '40px',
             dayLabelWidth: '30px',
-            dayLabelColor: '#666',
+            dayLabelColor: '#888',
             dayLabelFontSize: '12px'
         };
 
@@ -1472,7 +1470,7 @@ class BlockDayDiagram {
             }
         }
 
-        const baseColor = '#4A90E2'; // Default, could be extracted from options
+        const baseColor = '#333333'; // Grey for receipt style
         const rows = container.querySelectorAll('.block-day-row');
 
         rows.forEach((row, day) => {

@@ -9,6 +9,9 @@ if (typeof importScripts !== 'undefined') {
 
 const STORAGE_KEY = 'v2';
 const WRITE_INTERVAL_MS = 5000; // Write to storage every 5 seconds
+const REPORT_RETENTION_DAYS = 30;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // Run cleanup check every hour
+let lastCleanupTime = 0;
 
 // In-memory accumulator: { [url]: { seconds: number, hours: { [hour]: number } } }
 let pendingUpdates = {};
@@ -135,11 +138,6 @@ async function flushToStorage() {
                     hour_block: Array(24).fill(0)
                 };
                 storage.display.reports[url].blocks.push(dayBlock);
-                
-                // Keep only last 30 days of reports per URL to prevent storage bloat
-                if (storage.display.reports[url].blocks.length > 30) {
-                    storage.display.reports[url].blocks.shift();
-                }
             }
             
             // Apply hour updates to reports
@@ -173,6 +171,42 @@ async function flushToStorage() {
 }
 
 /**
+ * Removes report blocks older than REPORT_RETENTION_DAYS to prevent storage bloat.
+ * Also removes URL entries that have no blocks left.
+ */
+async function cleanupOldReports() {
+    try {
+        const storage = await getStorage();
+        if (!storage.display || !storage.display.reports) return;
+
+        const cutoff = Date.now() - (REPORT_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+        let changed = false;
+
+        for (const url of Object.keys(storage.display.reports)) {
+            const entry = storage.display.reports[url];
+            if (!entry.blocks) continue;
+
+            const before = entry.blocks.length;
+            entry.blocks = entry.blocks.filter(b => b.unix >= cutoff);
+
+            if (entry.blocks.length !== before) changed = true;
+
+            // Remove the URL key entirely if no blocks remain
+            if (entry.blocks.length === 0) {
+                delete storage.display.reports[url];
+            }
+        }
+
+        if (changed) {
+            await chrome.storage.local.set({ [STORAGE_KEY]: storage });
+        }
+        lastCleanupTime = Date.now();
+    } catch (e) {
+        console.error('Failed to cleanup old reports:', e);
+    }
+}
+
+/**
  * Main tick function - runs every second
  */
 async function tick() {
@@ -186,6 +220,11 @@ async function tick() {
     if (Date.now() - lastWriteTime >= WRITE_INTERVAL_MS) {
         await flushToStorage();
     }
+
+    // Periodically cleanup old reports
+    if (Date.now() - lastCleanupTime >= CLEANUP_INTERVAL_MS) {
+        await cleanupOldReports();
+    }
 }
 
 // Use setInterval for per-second tracking
@@ -196,12 +235,14 @@ chrome.runtime.onSuspend.addListener(async () => {
     await flushToStorage();
 });
 
-// Log installation for debugging
+// Log installation for debugging and run initial cleanup
 chrome.runtime.onInstalled.addListener(async () => {
     console.log('Screen Time extension installed/updated');
+    await cleanupOldReports();
 });
 
-// Log startup for debugging  
+// Log startup for debugging and run initial cleanup
 chrome.runtime.onStartup.addListener(async () => {
     console.log('Screen Time extension started');
+    await cleanupOldReports();
 });
